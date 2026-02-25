@@ -1,0 +1,2498 @@
+local Fluent = loadstring(game:HttpGet("https://github.com/dawid-scripts/Fluent/releases/latest/download/main.lua"))()
+local SaveManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/SaveManager.lua"))()
+local InterfaceManager = loadstring(game:HttpGet("https://raw.githubusercontent.com/dawid-scripts/Fluent/master/Addons/InterfaceManager.lua"))()
+
+-- KONFIGURACJA OKNA
+local Window = Fluent:CreateWindow({
+    Title = "Auto Quest | by Orynn ",
+    TabWidth = 160,
+    Size = UDim2.fromOffset(580, 460),
+    Acrylic = false, -- Efekt rozmycia (Glass)
+    Theme = "Dark", -- Ciemny motyw
+    MinimizeKey = Enum.KeyCode.LeftControl
+})
+
+-- USTAWIENIE KOLORU AKCENTU (NEON BLUE)
+local Options = Fluent.Options
+-- Fluent automatycznie zarządza motywami, ale wymusimy cyjan jako domyślny jeśli się da przez InterfaceManager, 
+-- lub zaufamy, że użytkownik sam sobie ustawi w Settings. Domyślnie Fluent jest Niebieski/Szary. 
+-- Ale kod poniżej (w sekcji Settings) pozwoli zmienić kolor.
+
+-- SERWISY I ZMIENNE
+local RS = game:GetService("ReplicatedStorage")
+local Plr = game:GetService("Players").LocalPlayer
+local Remotes = RS:WaitForChild("Remotes")
+
+-- BAZA ID SKRZYNEK
+local FullCaseList = {
+    "ValentineCase", "HolyCase", "LEVEL10", "LEVEL20", "LEVEL30", "LEVEL40", "LEVEL50", "LEVEL60", "LEVEL70", "LEVEL80", "LEVEL90", "LEVEL100", "LEVEL110", "LEVEL120", "Free", "Group", "Vip", "50AK", "50AWP", "50DEAGLE", "50GLOCK", "50GLOVES", "50KNIFE", "50M4A1", "50USP",
+    "ADVANCED", "AK47", "AWP", "Abyssal", "BREACH", "Beast", "Bloodsport", "CHEESE", "CIRCUIT", "CLASSIFIED", "COBALT", "COVERT",
+    "DESOLATE", "DECIMA", "DREAMHACK_LEGENDS", "Disarray", "DivineCase", "DOPPLER", "ELEMENTAL", "ELITE", "EMERALD", "ENERGY", "Exotic", "FIFIS", "FROSTBITE", "Fade", "Franklin", "Frosty",
+    "GalaxyCase", "Gieracz", "GLOCK18", "GLOVES", "Gloves", "HARDENED", "HAZARDOUS", "HOWLING", "Industrial", "Inferno", "Iris", "Jacob", "Jungle",
+    "KATOWICE_CHALLENGERS", "Oblivion", "KATOWICE_LEGENDS", "KNIFE", "KnifeCase", "KRAKOW_CHALLENGERS", "KRAKOW_LEGENDS", "LIGHT", "LORE", "Luxurious", "M4A4", "MASTER", "MILSPEC", "Military",
+    "NIGHTMARE", "Neon", "PABLO", "PERCHANCE", "Risky", "RESTRICTED", "Radiation", "Royal", "SOUVENIR", "STARTER", "STATION", "Sakura", "StarGazingCase", "TECH", "TIGER", "TOY", "ULTRA", "USP", "VAPORWAVE", "VINTAGE", "Void"
+}
+
+-- ZMIENNE GLOBALNE SKRYPTU
+getgenv().AutoQuest = false
+getgenv().AutoOpenActive = false
+getgenv().AutoOpenBox = FullCaseList[1]
+getgenv().AutoOpenAmount = 1
+getgenv().AutoOpenWild = false
+getgenv().GlobalWildMode = false
+getgenv().AutoLevelRewards = false
+getgenv().OpeningLevelCases = false
+getgenv().AutoSell = false
+getgenv().AutoRefreshInv = false
+getgenv().PriceCache = getgenv().PriceCache or {}
+getgenv().ForcePriceUpdate = true
+getgenv().AutoLockSell = false
+getgenv().LockSellThreshold = 1000
+local startTime = tick() -- Moved to global scope for Session Time tracking
+
+
+
+-- ==============================================================================
+-- WEBHOOK FUNCTION
+local function SendWebhook(data)
+    if not getgenv().WebhookUrl or getgenv().WebhookUrl == "" then return end
+    local request = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or request
+    if request then
+        pcall(function()
+            request({
+                Url = getgenv().WebhookUrl,
+                Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = game:GetService("HttpService"):JSONEncode({
+                    username = "Orynn Script",
+                    avatar_url = "https://i.imgur.com/8QZ8Z9M.png",
+                    embeds = {data}
+                })
+            })
+        end)
+    end
+end
+
+-- ==============================================================================
+-- TABS (ZAKŁADKI)
+-- ==============================================================================
+local Tabs = {
+    Main = Window:AddTab({ Title = "Auto Quest", Icon = "home" }),
+    Opening = Window:AddTab({ Title = "Auto Opening", Icon = "box" }),
+    AutoBattle = Window:AddTab({ Title = "Auto Battle", Icon = "swords" }),
+    Inventory = Window:AddTab({ Title = "Inventory", Icon = "backpack" }),
+    WinLose = Window:AddTab({ Title = "Win/Lose & Spy", Icon = "bar-chart-2" }),
+    Visual = Window:AddTab({ Title = "Visuals / HUD", Icon = "eye" }),
+    Misc = Window:AddTab({ Title = "Misc / Extra", Icon = "folder" }),
+    Settings = Window:AddTab({ Title = "Settings", Icon = "settings" })
+}
+
+-- ==============================================================================
+-- HELPERY LOGICZNE
+-- ==============================================================================
+
+-- Case Mapping (Shared between Quest and Exchange)
+local ItemCaseMap = {
+    -- ValentineCase items (Driver Gloves, MAC-10, P250)
+    ["HEARTS"] = "ValentineCase",       -- Driver Gloves | Hearts
+    ["CUPID"] = "ValentineCase",        -- MAC-10 | Cupid
+    ["FOREVER"] = "ValentineCase",      -- P250 | Forever
+
+    -- HolyCase items (Bayonet, Glock-18, MP5)
+    ["RESURRECTION"] = "HolyCase",      -- Bayonet | Resurrection
+    ["BAYONET"] = "HolyCase",           -- Bayonet (Generic)
+    ["LOSTSOULS"] = "HolyCase",         -- Glock-18 | Lost Souls
+    ["MALTHEISM"] = "HolyCase",         -- MP5 | Maltheism
+
+    -- COBALT (Wild Mode)
+    ["ICARUSFELL"] = "COBALT",          -- M4A1-S | Icarus Fell
+
+    -- ELEMENTAL
+    ["REEFGRIEF"] = "ELEMENTAL"         -- P90 | Reef Grief
+}
+
+local WildOverrideItems = {
+    "ICARUSFELL"
+}
+
+local function GetBoxID(titleRaw)
+    local txt = titleRaw:upper()
+    local cleanTxt = txt:gsub("[%p%s]", "") -- Remove all punctuation and spaces for item matching
+    
+    -- 0. ITEM SPECIFIC OVERRIDES (User Request)
+    -- Check against cleaned map keys
+    
+    local forceWild = false
+    for _, wildItem in ipairs(WildOverrideItems) do
+        if cleanTxt:find(wildItem) then forceWild = true break end
+    end
+    
+    for itemPart, caseId in pairs(ItemCaseMap) do
+        if cleanTxt:find(itemPart) then return caseId, forceWild end
+    end
+    
+    -- MANUAL OVERRIDES (Fix broken names)
+    if txt:find("KRAKOW") and txt:find("2017") then return "KRAKOW_CHALLENGERS" end
+    if txt:find("DREAMHACK") and txt:find("2014") then return "DREAMHACK_LEGENDS" end
+    if txt:find("KATOWICE") and txt:find("2014") then return "KATOWICE_CHALLENGERS" end
+    
+    -- 1. IS IT A 50/50 CASE? (Specific check for literal "50/50")
+    -- Quests might look like: "OPEN 50 50/50 AWP" (Amount: 50, Case: 50/50 AWP)
+    if txt:find("50/50") then
+        if txt:find("AWP") then return "50AWP" end
+        if txt:find("AK") then return "50AK" end
+        if txt:find("DEAGLE") then return "50DEAGLE" end
+        if txt:find("GLOCK") then return "50GLOCK" end
+        if txt:find("USP") then return "50USP" end
+        if txt:find("M4A1") then return "50M4A1" end
+        if txt:find("KNIFE") then return "50KNIFE" end
+        if txt:find("GLOVES") then return "50GLOVES" end
+        -- Fallbacks for other 50/50s if they exist in FullList
+    end
+
+    -- 2. NORMAL CASES (Only if NOT 50/50)
+    -- This handles "AWP Case" -> "AWP" correctly because we skipped the 50/50 check above
+    local defaultBox = "PERCHANCE"
+    if getgenv().QuestBattleCase and getgenv().QuestBattleCase ~= "Auto-Detect" then
+        defaultBox = getgenv().QuestBattleCase
+    end
+    local boxID = defaultBox
+    -- Remove "50/50" explicitly first so it doesn't disturb cleaning, though we handled it above.
+    -- Remove "CASE" and non-alphanumeric chars. 
+    -- Be careful not to remove "50" if the case name is just "LEVEL50" (but Level cases usually have no spaces)
+    local cleanTitle = txt:gsub("50/50", ""):gsub("CASE", ""):gsub("[%p%s]", "") 
+    
+    for _, id in pairs(FullCaseList) do
+        -- Skip 50... IDs here to ensure we don't match them for normal quests
+        if not id:match("^50") then
+             local cleanID = id:upper():gsub("CASE", ""):gsub("[%p%s]", "")
+             if cleanTitle:find(cleanID, 1, true) then 
+                 boxID = id 
+                 break 
+             end
+        end
+    end
+    
+    if txt:match("PARACHUTE") then boxID = "PERCHANCE" end
+    if txt:match("GLITCH") then boxID = "GLITCH" end
+    return boxID, forceWild
+end
+
+local function SendWebhook(embedData)
+    if not getgenv().WebhookUrl or getgenv().WebhookUrl == "" or not getgenv().WebhookEnabled then return end
+    
+    local data = {
+        ["embeds"] = { embedData }
+    }
+    
+    local headers = { ["content-type"] = "application/json" }
+    
+    local request = http_request or request or HttpPost or syn.request
+    if request then
+        request({Url = getgenv().WebhookUrl, Body = game:GetService("HttpService"):JSONEncode(data), Method = "POST", Headers = headers})
+    end
+end
+
+local function CanWild(id)
+    local wp = RS:FindFirstChild("Misc") and RS.Misc:FindFirstChild("WildPrices")
+    if wp and wp:FindFirstChild(id) then return true end
+    return false
+end
+
+local function UniversalBattle(BoxID, Mode, Amount, PlrLimit)
+    local pack = {}
+    for i=1, Amount do table.insert(pack, BoxID) end
+    local ok = pcall(function() 
+        return Remotes.CreateBattle:InvokeServer(pack, PlrLimit, Mode, false) 
+    end)
+    
+    if ok then
+        task.wait(1.5)
+        for i=1,15 do
+            for _,f in pairs(RS.Battles:GetChildren()) do
+                if f:FindFirstChild("Host") and f.Host.Value == Plr.Name then
+                    local bid = tonumber(f.Name)
+                    
+                    -- FIX: Sync Battle UI State to avoid local script crash
+                    pcall(function()
+                        local cw = Plr.PlayerGui:FindFirstChild("CurrentWindow")
+                        if cw then cw.Value = "Case Battles" end
+                        
+                        local bGui = Plr.PlayerGui:FindFirstChild("Windows")
+                        if bGui and bGui:FindFirstChild("Case Battles") then
+                            local bs = bGui["Case Battles"]:FindFirstChild("BattlesScript")
+                            if bs and bs:FindFirstChild("BattleId") then
+                                -- Reset first to force native .Changed event
+                                if bs.BattleId:IsA("StringValue") then
+                                    bs.BattleId.Value = ""
+                                    task.wait(0.05)
+                                    bs.BattleId.Value = f.Name
+                                else
+                                    bs.BattleId.Value = 0
+                                    task.wait(0.05)
+                                    bs.BattleId.Value = bid
+                                end
+                            end
+                        end
+                    end)
+                    
+                    -- Wait for our own player card to render
+                    local bfMain = Plr.PlayerGui:FindFirstChild("Battle")
+                    if bfMain then bfMain = bfMain:FindFirstChild("BattleFrame") end
+                    if bfMain then bfMain = bfMain:FindFirstChild("Main") end
+                    
+                    if bfMain then
+                        local tks = 0
+                        -- Wait max 2 seconds for native UI to build our card
+                        while not bfMain:FindFirstChild(Plr.Name) and tks < 20 do
+                            task.wait(0.1)
+                            tks = tks + 1
+                        end
+                    else
+                        task.wait(1.5) 
+                    end
+                    
+                    for b=1, (PlrLimit - 1) do 
+                        Remotes.AddBot:FireServer(bid) 
+                        task.wait(0.5) 
+                    end
+                    return true
+                end
+            end
+            task.wait(0.3)
+        end
+    end
+    return false
+end
+
+local function ExitBattle()
+    pcall(function()
+        local battleGUI = Plr.PlayerGui:FindFirstChild("Battle")
+        if battleGUI and battleGUI.Enabled then
+            local main = battleGUI:FindFirstChild("BattleFrame") and battleGUI.BattleFrame:FindFirstChild("Main")
+            if main then
+                local myFrame = main:FindFirstChild(Plr.Name)
+                if myFrame then
+                    local resultScreen = myFrame:FindFirstChild("ResultScreen")
+                    if resultScreen and resultScreen.Visible then
+                        local retBtn = resultScreen:FindFirstChild("Controls") and resultScreen.Controls:FindFirstChild("ReturnButton")
+                        if retBtn and retBtn.Visible then
+                            for _,c in pairs(getconnections(retBtn.Activated)) do c:Fire() end
+                            return
+                        end
+                    end
+                end
+            end
+            
+            -- Fallback force exit: if ResultScreen is visible OR we are no longer in an active battle
+             pcall(function()
+                local inActiveBattle = false
+                if RS:FindFirstChild("Battles") then
+                    for _,b in pairs(RS.Battles:GetChildren()) do
+                        if b:FindFirstChild("Players") and b.Players:FindFirstChild(Plr.Name) then
+                            inActiveBattle = true
+                            break
+                        end
+                    end
+                end
+
+                local isVisible = false
+                if battleGUI.BattleFrame.Main:FindFirstChild(Plr.Name) and battleGUI.BattleFrame.Main[Plr.Name]:FindFirstChild("ResultScreen") then
+                    isVisible = battleGUI.BattleFrame.Main[Plr.Name].ResultScreen.Visible
+                end
+                
+                if isVisible or not inActiveBattle then
+                     battleGUI.Enabled = false
+                     local win = Plr.PlayerGui:FindFirstChild("Windows")
+                     if win then win.Enabled = true end
+                     local mainUI = Plr.PlayerGui:FindFirstChild("Main")
+                     if mainUI then mainUI.Enabled = true end
+                     local cw = Plr.PlayerGui:FindFirstChild("CurrentWindow")
+                     if cw then cw.Value = "Case Battles" end
+                end
+             end)
+        end
+    end)
+end
+
+local function AutoReturn()
+    -- Auto Return disabled by user request (preventing mouse clicks)
+    return
+end
+
+-- ==============================================================================
+-- 1. ZAKŁADKA: AUTO QUEST (LOGIKA + UI)
+-- ==============================================================================
+local QuestStatusPara = Tabs.Main:AddParagraph({ Title = "Battle Quest", Content = "Waiting..." })
+local QuestStatusOpenPara = Tabs.Main:AddParagraph({ Title = "Open Quest", Content = "Waiting..." })
+local ToggleQuest = Tabs.Main:AddToggle("AutoQuestToggle", {Title = "🚀 AUTO QUEST ", Default = false })
+local DropdownQuestMode = Tabs.Main:AddDropdown("QuestModeSelect", { Title = "Quest Mode", Values = {"Legit (Safe)", "Risky (Fast)"}, Default = 1, Multi = false })
+DropdownQuestMode:OnChanged(function(Value)
+    if Value == "Risky (Fast)" then getgenv().QuestMode = "Risky" else getgenv().QuestMode = "Legit" end
+end)
+
+local StarsLabel = Tabs.Main:AddParagraph({ Title = "Mantra", Content = "???" })
+
+
+
+local AvailableQuestsPara = Tabs.Main:AddParagraph({ Title = "Available Quests", Content = "Scanning..." })
+
+-- HUD VARIABLE
+local StarsHUDGui = nil
+
+local function UpdateStarsHUD(starTxt, moneyTxt)
+    if not getgenv().StarsHUDEnabled then
+        if StarsHUDGui then StarsHUDGui:Destroy(); StarsHUDGui = nil end
+        return
+    end
+
+    if not StarsHUDGui then
+        local sg = Instance.new("ScreenGui")
+        sg.Name = "OrynnStarsHUD"
+        if syn and syn.protect_gui then syn.protect_gui(sg) end
+        sg.Parent = game:GetService("CoreGui")
+
+        local frame = Instance.new("Frame")
+        frame.Name = "Main"
+        frame.Size = UDim2.fromOffset(480, 45) -- Widened for two stats
+        frame.Position = UDim2.new(0.5, 0, 0.05, 0)
+        frame.AnchorPoint = Vector2.new(0.5, 0) 
+        frame.BackgroundColor3 = Color3.fromRGB(15, 15, 15)
+        frame.BackgroundTransparency = 0.1
+        frame.BorderSizePixel = 0
+        frame.Parent = sg
+        
+        local uic = Instance.new("UICorner")
+        uic.CornerRadius = UDim.new(0, 12)
+        uic.Parent = frame
+        
+        -- STAR SECTION
+        local starIcon = Instance.new("TextLabel")
+        starIcon.Size = UDim2.fromOffset(45, 45)
+        starIcon.Position = UDim2.new(0, 5, 0, 0)
+        starIcon.BackgroundTransparency = 1
+        starIcon.Text = "⭐"
+        starIcon.TextSize = 24
+        starIcon.Parent = frame
+        
+        local starLabel = Instance.new("TextLabel")
+        starLabel.Name = "StarText"
+        starLabel.Size = UDim2.new(0, 200, 1, 0)
+        starLabel.Position = UDim2.new(0, 45, 0, 0)
+        starLabel.BackgroundTransparency = 1
+        starLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+        starLabel.TextSize = 19
+        starLabel.Font = Enum.Font.GothamBold
+        starLabel.TextXAlignment = Enum.TextXAlignment.Left
+        starLabel.Text = starTxt or "..."
+        starLabel.Parent = frame
+
+        -- MONEY SECTION
+        local moneyIcon = Instance.new("TextLabel")
+        moneyIcon.Size = UDim2.fromOffset(45, 45)
+        moneyIcon.Position = UDim2.new(0, 240, 0, 0) -- Middle
+        moneyIcon.BackgroundTransparency = 1
+        moneyIcon.Text = "💰"
+        moneyIcon.TextSize = 24
+        moneyIcon.Parent = frame
+        
+        local moneyLabel = Instance.new("TextLabel")
+        moneyLabel.Name = "MoneyText"
+        moneyLabel.Size = UDim2.new(0, 200, 1, 0)
+        moneyLabel.Position = UDim2.new(0, 280, 0, 0)
+        moneyLabel.BackgroundTransparency = 1
+        moneyLabel.TextColor3 = Color3.fromRGB(85, 255, 127) -- Light Green
+        moneyLabel.TextSize = 19
+        moneyLabel.Font = Enum.Font.GothamBold
+        moneyLabel.TextXAlignment = Enum.TextXAlignment.Left
+        moneyLabel.Text = moneyTxt or "..."
+        moneyLabel.Parent = frame
+
+        -- Make Draggable
+        local UIS = game:GetService("UserInputService")
+        local dragging, dragInput, dragStart, startPos
+        frame.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = frame.Position
+                
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                    end
+                end)
+            end
+        end)
+        frame.InputChanged:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                dragInput = input
+            end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if input == dragInput and dragging then
+                local delta = input.Position - dragStart
+                frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+
+        StarsHUDGui = sg
+    end
+
+    if StarsHUDGui and StarsHUDGui:FindFirstChild("Main") then
+        local sL = StarsHUDGui.Main:FindFirstChild("StarText")
+        local mL = StarsHUDGui.Main:FindFirstChild("MoneyText")
+        if sL then sL.Text = starTxt end
+        if mL then mL.Text = moneyTxt end
+    end
+end
+
+-- Licznik Gwiazdek + Stars/Hour Calculator
+task.spawn(function()
+    local startStars = nil
+    local startTime = tick()
+    
+    while true do
+        pcall(function()
+            local tickets = Plr:FindFirstChild("PlayerData") and Plr.PlayerData:FindFirstChild("Currencies") and Plr.PlayerData.Currencies:FindFirstChild("Tickets")
+            if tickets then 
+                local current = tickets.Value
+                if not startStars then startStars = current; startTime = tick() end
+                
+                local gained = current - startStars
+                local elapsed = tick() - startTime
+                
+                -- Avoid division by zero and crazy spikes at start
+                local perHour = 0
+                if elapsed > 10 and gained > 0 then
+                    perHour = math.floor((gained / elapsed) * 3600)
+                end
+                
+                -- Format with commas
+                local function formatNum(n) return tostring(n):reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", "") end
+                
+                -- Money Logic
+                local moneyVal = 0
+                if Plr.PlayerData.Currencies:FindFirstChild("Balance") then
+                     moneyVal = Plr.PlayerData.Currencies.Balance.Value
+                end
+                
+                local mInt = math.floor(moneyVal)
+                local mDec = (moneyVal - mInt) * 100
+                local moneyStr = formatNum(mInt) .. "." .. string.format("%02d", mDec)
+                
+                local starTxtDisplay = formatNum(current) .. " (+" .. formatNum(perHour) .. "/h)"
+                local txt = "⭐ " .. starTxtDisplay .. " | 💰 " .. moneyStr
+                
+                StarsLabel:SetDesc(txt)
+                UpdateStarsHUD(starTxtDisplay, moneyStr)
+            else 
+                StarsLabel:SetDesc("Data Error") 
+            end
+        end)
+        task.wait(2)
+    end
+end)
+
+local LastRefresh = 0
+local StuckCount = 0
+local LastQuestProgress = ""
+
+local function RunAutoQuest()
+    if getgenv().OpeningLevelCases then
+        QuestStatusPara:SetDesc("↪️ Priority: Level Rewards")
+        QuestStatusOpenPara:SetDesc("Quest Paused...")
+        return 
+    end
+
+    ExitBattle()
+    
+    if tick() - LastRefresh > 5 then
+        local cw = Plr.PlayerGui:FindFirstChild("CurrentWindow")
+        if cw then
+            cw.Value = "Main"
+            task.wait(0.1)
+            cw.Value = "Quests"
+            QuestStatusPara:SetDesc("🔄 Server sync...")
+            QuestStatusOpenPara:SetDesc("...")
+            task.wait(1.5)
+            
+            -- Quest Completion Check (Simple: if we refreshed, check if previous quest is gone? 
+            -- Better: Just log whenever the number of available quests changes or decreases? 
+            -- Simplest for now: The loop handles state. We can log "Quest Finished" if we detect completion logic in the battle loop or open loop.
+            -- Actually, let's log when we RETURN from a quest cycle and quest count dropped? 
+            -- Or just log inside the loops when done.)
+        end
+        LastRefresh = tick()
+    end
+
+    local h = Plr.PlayerGui:FindFirstChild("Windows")
+    h = h and h:FindFirstChild("Quests") and h.Quests:FindFirstChild("QuestHolder")
+    if not h then 
+        QuestStatusPara:SetDesc("Quest window not found")
+        QuestStatusOpenPara:SetDesc("Waiting...")
+        return 
+    end
+
+    local availableQuests = {}
+    local questListText = ""
+    for _, v in pairs(h:GetChildren()) do
+        if v:IsA("Frame") and v:FindFirstChild("Title") and v:FindFirstChild("Progress") then
+            local titleTxt = v.Title.Text:upper()
+            local cur, max = v.Progress.Text:match("(%d+)/(%d+)")
+            cur, max = tonumber(cur), tonumber(max)
+            if cur and max and cur < max then
+                table.insert(availableQuests, {Frame = v, Title = titleTxt, Cur = cur, Max = max})
+                questListText = questListText .. "📦 " .. titleTxt .. " (" .. cur .. "/" .. max .. ")\n"
+            end
+        end
+    end
+    
+    
+    if questListText == "" then questListText = "No active quests." end
+    AvailableQuestsPara:SetDesc(questListText)
+
+    -- STUCK DETECTION LOGIC (Requested)
+    -- Check if progress string is exactly same as last time
+    -- Only run this check if we have quests
+    if #availableQuests > 0 then
+        -- Construct a unique string representing current state of all quests (Title + Cur)
+        local currentProgressStr = ""
+        for _, q in ipairs(availableQuests) do
+            currentProgressStr = currentProgressStr .. q.Title .. ":" .. q.Cur .. "|"
+        end
+        
+        if currentProgressStr == LastQuestProgress then
+            StuckCount = StuckCount + 1
+            -- If stuck for 12 checks (approx 12 * 5s = 60s, or depending on loop speed)
+            -- User asked for "after 12 synchronizations"
+            -- Auto-Save Logic at 10th stuck check (Safety Backup)
+            if StuckCount == 10 then
+                pcall(function()
+                     SaveManager:Save("autosave")
+                     SaveManager.Options.AutoloadConfig.Value = "autosave" -- Set autoload manually in options if available or just save specific file
+                     -- Since SaveManager handles autoload via file, we might need to rely on the library features
+                     -- Let's try to overwrite "autosave" and Set Autoload
+                     local success, err = pcall(function() 
+                        writefile("Fluent/CaseParadise_autosave.lua", "return " .. game:GetService("HttpService"):JSONEncode(SaveManager:SaveTable())) 
+                     end)
+                     -- Also try standard SaveManager way if possible
+                     SaveManager:SetIgnoreIndexes({})
+                     SaveManager:Save("autosave")
+                end)
+            end
+
+            if StuckCount >= 12 then
+                -- CHECK IF ONLY OPEN QUESTS (Avoid Kick on No Money)
+                local hasBattleQuest = false
+                for _, q in ipairs(availableQuests) do
+                    local t = q.Title
+                    if t:match("BATTLE") or t:match("PLAY") or t:match("WIN") or t:match("SHARED") then
+                         hasBattleQuest = true
+                         break
+                    end
+                end
+
+                if not hasBattleQuest then
+                     -- Only Open Quests active -> Probably No Money -> Do NOT Kick
+                     local lang = getgenv().LangCode or "PL"
+                     local txt = Translations[lang] and Translations[lang].StuckMsg or Translations["PL"].StuckMsg
+                     QuestStatusPara:SetDesc(txt)
+                     StuckCount = 0 -- Reset counter to waiting
+                else
+                    -- TRIGGER REJOIN (Original Logic)
+                    if getgenv().WebhookEnabled then
+                         SendWebhook({
+                             ["title"] = "⚠️ Zbugowało się",
+                             ["description"] = "Zbugowało się, rejoinuję... 🚀",
+                             ["color"] = 16711680, -- Red
+                             ["footer"] = { ["text"] = "Orynn Case Paradise Auto Fix" }
+                         })
+                    end
+                    
+                    -- Wait a tiny bit for webhook to fly then rejoin
+                    task.wait(2)
+                    task.wait(2)
+                    
+                    if getgenv().PerformRejoin then
+                        getgenv().PerformRejoin()
+                    else
+                        game:GetService("TeleportService"):Teleport(game.PlaceId, game.Players.LocalPlayer)
+                    end
+                    return 
+                end
+            end
+        else
+            -- Progress changed! Reset counter
+            StuckCount = 0
+            LastQuestProgress = currentProgressStr
+        end
+    else
+        -- No quests, reset stuck count (or maybe we are finished)
+        StuckCount = 0
+    end
+
+    if #availableQuests == 0 then
+        QuestStatusPara:SetDesc("✅ Quests completed / Waiting...")
+        QuestStatusOpenPara:SetDesc("Waiting...")
+        return
+    end
+
+    local playQuest = nil
+    local sharedQuest = nil
+    local winQuest = nil
+    local openQuestChoice = nil
+
+    for _, q in ipairs(availableQuests) do
+        local t = q.Title
+        if t:match("WIN") then
+            if not winQuest then winQuest = q end
+        elseif t:match("SHARED") then
+            if not sharedQuest then sharedQuest = q end
+        elseif t:match("PLAY") or t:match("BATTLE") then
+            -- Catch-all for PLAY/BATTLE that isn't SHARED (Classic, Terminal, etc.)
+            if not playQuest then playQuest = q end
+        else
+            if not openQuestChoice then openQuestChoice = q end
+        end
+    end
+
+    -- Priority: PLAY (Classic/Other) > SHARED > WIN > OPEN
+    local selectedQuest = playQuest or sharedQuest or winQuest or openQuestChoice or availableQuests[1]
+
+    if selectedQuest then
+        local titleTxt = selectedQuest.Title
+        local cur, max = selectedQuest.Cur, selectedQuest.Max
+        local boxID, forceWild = GetBoxID(titleTxt)
+        local isBattle = (titleTxt:match("BATTLE") or titleTxt:match("PLAY") or titleTxt:match("WIN"))
+        
+        -- OVERRIDE FOR BATTLES (USER CHOICE)
+        if isBattle then
+            boxID = getgenv().QuestBattleCase or "PERCHANCE"
+        end
+        
+        if isBattle then
+             local mode = "CLASSIC"
+             if titleTxt:match("CRAZY TERMINAL") then mode = "CRAZY TERMINAL"
+             elseif titleTxt:match("TERMINAL") then mode = "TERMINAL"
+             elseif titleTxt:match("JESTER") then mode = "JESTER"
+             elseif titleTxt:match("JACKPOT") then mode = "JACKPOT"
+             elseif titleTxt:match("SHARED") and not titleTxt:match("WIN") then mode = "SHARED" end
+
+             local plrLimit = 2
+             if titleTxt:match("3 PLAYER") then plrLimit = 3 elseif titleTxt:match("4 PLAYER") then plrLimit = 4 end
+            
+            QuestStatusPara:SetDesc("⚔️ [BATTLE] " .. boxID .. " (" .. cur .. "/" .. max .. ")")
+            UniversalBattle(boxID, mode, 1, plrLimit)
+            
+            local openQuest = nil
+            for _, q in ipairs(availableQuests) do
+                if not (q.Title:match("BATTLE") or q.Title:match("PLAY") or q.Title:match("WIN")) then
+                    openQuest = q; break
+                end
+            end
+            
+            if openQuest then
+                 local oTitle = openQuest.Title
+                 local oBox, oForceWild = GetBoxID(oTitle)
+                 local oCur, oMax = openQuest.Cur, openQuest.Max
+                 local startTime = tick()
+                 local maxBattleTime = 120
+                 local lastOpenTime = 0
+                 
+                 -- SPEED MODE (RISKY): Force 6.8s for normal cases, Jackpot must wait naturally
+                 if getgenv().QuestMode == "Risky" and mode ~= "JACKPOT" then
+                     local speedStart = tick()
+                     while (tick() - speedStart) < 6.8 do
+                          -- Still open cases in background if needed
+                          local oAmt = 5
+                          if (tick() - lastOpenTime) > 2.0 then
+                              lastOpenTime = tick()
+                              QuestStatusPara:SetDesc("⚡ [SPEED] " .. titleTxt .. " (" .. string.format("%.1f", 6.8 - (tick()-speedStart)) .. "s)")
+                              QuestStatusOpenPara:SetDesc("📦 " .. oTitle .. " (" .. oCur .. "/" .. oMax .. ")")
+                              task.spawn(function()
+                                  local w = (getgenv().GlobalWildMode or oBox == "PERCHANCE")
+                                  if w and not CanWild(oBox) then w = false end
+                                  pcall(function() Remotes.OpenCase:InvokeServer(oBox, oAmt, true, w) end)
+                              end)
+                              oCur = oCur + oAmt
+                          end
+                          task.wait(0.1)
+                     end
+                     ExitBattle()
+                 else
+                     -- LEGIT MODE / JACKPOT: Wait for ResultScreen natively
+                     while (tick() - startTime) < maxBattleTime do
+                         local bGui = Plr.PlayerGui:FindFirstChild("Battle")
+                         if not bGui or not bGui.Enabled then
+                             if (tick() - startTime) > 5 then break end 
+                         end
+                         if bGui and bGui:FindFirstChild("BattleFrame") and bGui.BattleFrame:FindFirstChild("Main") 
+                            and bGui.BattleFrame.Main:FindFirstChild(Plr.Name) 
+                            and bGui.BattleFrame.Main[Plr.Name]:FindFirstChild("ResultScreen") 
+                            and bGui.BattleFrame.Main[Plr.Name].ResultScreen.Visible then
+                             break
+                         end
+    
+                         local oAmt = 5
+                         if (tick() - lastOpenTime) > 3.5 then
+                             lastOpenTime = tick()
+                             QuestStatusPara:SetDesc("[Battle] " .. titleTxt .. " (" .. cur .. "/" .. max .. ")")
+                             QuestStatusOpenPara:SetDesc("📦 " .. oTitle .. " (" .. oCur .. "/" .. oMax .. ")")
+                             task.spawn(function()
+                                 local w = (getgenv().GlobalWildMode or oBox == "PERCHANCE")
+                                 if w and not CanWild(oBox) then w = false end
+                                 pcall(function() Remotes.OpenCase:InvokeServer(oBox, oAmt, true, w) end)
+                             end)
+                             oCur = oCur + oAmt
+                         end
+                         task.wait(0.5)
+                     end
+                     task.wait(0.6) -- Extra buffer for Jackpot UI to settle
+                     ExitBattle()
+                 end
+            else
+                 local startTime = tick()
+                 QuestStatusOpenPara:SetDesc("Waiting...")
+                 
+                 if getgenv().QuestMode == "Risky" and mode ~= "JACKPOT" then
+                     -- RISKY SPEEDRUN: 6.8s EXACTLY
+                     for i = 1, 68 do
+                         QuestStatusPara:SetDesc("⚡ [SPEED] " .. titleTxt .. " (" .. string.format("%.1f", 6.8 - (i/10)) .. "s)")
+                         task.wait(0.1)
+                     end
+                     ExitBattle()
+                 else
+                     -- LEGIT / JACKPOT: Wait for finish natively
+                     while (tick() - startTime) < 120 do
+                         local bGui = Plr.PlayerGui:FindFirstChild("Battle")
+                         if not bGui or not bGui.Enabled then if (tick() - startTime) > 5 then break end end
+                         if bGui and bGui:FindFirstChild("BattleFrame") and bGui.BattleFrame:FindFirstChild("Main") 
+                            and bGui.BattleFrame.Main:FindFirstChild(Plr.Name) 
+                            and bGui.BattleFrame.Main[Plr.Name]:FindFirstChild("ResultScreen") 
+                            and bGui.BattleFrame.Main[Plr.Name].ResultScreen.Visible then 
+                             break 
+                         end
+                         QuestStatusPara:SetDesc("⚔️ " .. titleTxt .. " (" .. cur .. "/" .. max .. ")")
+                         task.wait(1)
+                     end
+                     task.wait(0.6) -- Extra buffer for Jackpot UI to settle
+                     ExitBattle()
+                 end
+            end
+        else
+            ExitBattle() 
+            local amountToOpen = math.min(5, max - cur)
+            QuestStatusPara:SetDesc("Waiting...")
+            QuestStatusOpenPara:SetDesc("📦 " .. titleTxt .. " x" .. amountToOpen .. " (" .. cur .. "/" .. max .. ")")
+            
+            local w = (getgenv().GlobalWildMode or boxID == "PERCHANCE" or forceWild)
+            if w and not CanWild(boxID) then w = false end
+            pcall(function() Remotes.OpenCase:InvokeServer(boxID, amountToOpen, true, w) end)
+            
+            local mainWait = (getgenv().QuestMode == "Risky") and 1.5 or 3
+            task.wait(mainWait)
+        end
+    end
+end
+
+-- ToggleQuest definition moved up
+local DropdownBattleCase = Tabs.Main:AddDropdown("QuestBattleCaseSelect", {
+    Title = "CHOOSE BATTLE CASE",
+    Description = "Script will ALWAYS use this case for battles.",
+    Values = {"PERCHANCE", "Void", "Jungle"},
+    Multi = false,
+    Default = 1,
+})
+DropdownBattleCase:OnChanged(function(Value)
+    getgenv().QuestBattleCase = Value
+end)
+
+-- local ToggleQuest = Tabs.Main:AddToggle("AutoQuestToggle", {Title = "🚀 AUTO QUEST ", Default = false })
+ToggleQuest:OnChanged(function()
+    getgenv().AutoQuest = Options.AutoQuestToggle.Value
+    if getgenv().AutoQuest then
+        task.spawn(function()
+            while getgenv().AutoQuest do 
+                RunAutoQuest() 
+                -- If Risky, loop fast. If Legit, wait 1s.
+                local loopWait = (getgenv().QuestMode == "Risky") and 0.1 or 1
+                task.wait(loopWait) 
+            end
+        end)
+        task.spawn(function()
+            while getgenv().AutoQuest do AutoReturn() task.wait(1) end
+        end)
+    end
+end)
+
+-- ==============================================================================
+-- 2. ZAKŁADKA: AUTO OPENING
+-- ==============================================================================
+local AutoOpenStatusPara = Tabs.Opening:AddParagraph({ Title = "Status", Content = "Disabled" })
+
+local DropdownCase = Tabs.Opening:AddDropdown("OpenCaseSelect", {
+    Title = "Select Case",
+    Values = FullCaseList,
+    Multi = false,
+    Default = 1,
+})
+DropdownCase:OnChanged(function(Value) getgenv().AutoOpenBox = Value end)
+
+local SliderAmount = Tabs.Opening:AddSlider("OpenAmountSlider", {
+    Title = "Amount at once (Spam)",
+    Description = "How many open requests to verify per loop",
+    Default = 1,
+    Min = 1,
+    Max = 10,
+    Rounding = 0,
+    Callback = function(Value) getgenv().AutoOpenAmount = Value end
+})
+
+local ToggleWildOpen = Tabs.Opening:AddToggle("WildOpenToggle", {Title = "Wild Mode (Boost)", Default = false })
+ToggleWildOpen:OnChanged(function() getgenv().AutoOpenWild = Options.WildOpenToggle.Value end)
+
+local ToggleStartOpen = Tabs.Opening:AddToggle("StartOpenToggle", {Title = "START AUTO OPEN", Default = false })
+ToggleStartOpen:OnChanged(function()
+    getgenv().AutoOpenActive = Options.StartOpenToggle.Value
+    if getgenv().AutoOpenActive then
+        AutoOpenStatusPara:SetDesc("SEARCHING " .. getgenv().AutoOpenBox .. "...")
+        task.spawn(function()
+            while getgenv().AutoOpenActive do
+                local box = getgenv().AutoOpenBox
+                local amt = getgenv().AutoOpenAmount
+                local w = getgenv().AutoOpenWild
+                if w and not CanWild(box) then w = false end
+                ExitBattle()
+                pcall(function() Remotes.OpenCase:InvokeServer(box, amt, true, w) end)
+                if getgenv().AutoOpenActive then
+                    AutoOpenStatusPara:SetDesc("OPENING " .. box .. " (Wait 3.3s...)")
+                end
+                task.wait(3.3)
+            end
+            AutoOpenStatusPara:SetDesc("STOPPED")
+        end)
+    else
+        AutoOpenStatusPara:SetDesc("STOPPED")
+    end
+end)
+
+-- Level Rewards moved to MISC tab
+
+
+-- ==============================================================================
+-- 2.5 ZAKŁADKA: AUTO BATTLE
+-- ==============================================================================
+local ABStatus = Tabs.AutoBattle:AddParagraph({ Title = "Status", Content = "Waiting..." })
+
+local ABBox = Tabs.AutoBattle:AddDropdown("AB_Box", { Title = "Select Case", Values = FullCaseList, Default = 1 })
+local ABAmt = Tabs.AutoBattle:AddSlider("AB_Amt", { Title = "Case Amount", Min = 1, Max = 50, Default = 1, Rounding = 0 })
+local ABPlrs = Tabs.AutoBattle:AddSlider("AB_Plrs", { Title = "Player Count", Min = 2, Max = 4, Default = 2, Rounding = 0 })
+local ABMode = Tabs.AutoBattle:AddDropdown("AB_Mode", { Title = "Mode", Values = {"CLASSIC", "SHARED", "TERMINAL", "JESTER", "CRAZY TERMINAL", "JACKPOT"}, Default = 1 })
+local ABLimit = Tabs.AutoBattle:AddSlider("AB_Limit", { Title = "Battle Limit (0 = Infinite)", Min = 0, Max = 100, Default = 0, Rounding = 0 })
+
+local ToggleAutoBattle = Tabs.AutoBattle:AddToggle("AutoBattleToggle", {Title = "START AUTO BATTLE", Default = false })
+
+ToggleAutoBattle:OnChanged(function()
+    getgenv().AutoBattleActive = Options.AutoBattleToggle.Value
+    if getgenv().AutoBattleActive then
+        task.spawn(function()
+            local battlesDone = 0
+            while getgenv().AutoBattleActive do
+                local limit = Options.AB_Limit.Value
+                if limit > 0 and battlesDone >= limit then
+                     ABStatus:SetDesc("Limit reached ("..battlesDone.."/"..limit..").")
+                     Options.AutoBattleToggle:SetValue(false)
+                     break
+                end
+
+                ABStatus:SetDesc("Starting battle " .. (battlesDone+1) .. "...")
+                
+                -- Ensure exit previous
+                ExitBattle() 
+                task.wait(0.5)
+
+                local box = Options.AB_Box.Value
+                local mode = Options.AB_Mode.Value
+                local amt = Options.AB_Amt.Value
+                local plr = Options.AB_Plrs.Value
+
+                local success = UniversalBattle(box, mode, amt, plr)
+                
+                if success then
+                    ABStatus:SetDesc("Battle in progress...")
+                    -- Wait for finish
+                    local startT = tick()
+                    while (tick() - startT) < 120 do
+                        if not getgenv().AutoBattleActive then break end
+                        
+                        -- Check for ResultScreen
+                        local bGui = Plr.PlayerGui:FindFirstChild("Battle")
+                        local finished = false
+                         if bGui and bGui.Enabled and bGui:FindFirstChild("BattleFrame") and bGui.BattleFrame:FindFirstChild("Main") then
+                            local myFrame = bGui.BattleFrame.Main:FindFirstChild(Plr.Name)
+                            if myFrame and myFrame:FindFirstChild("ResultScreen") and myFrame.ResultScreen.Visible then
+                                finished = true
+                            end
+                         end
+                         
+                         if finished then 
+                            break 
+                         end
+                         task.wait(1)
+                    end
+                    
+                    battlesDone = battlesDone + 1
+                    ABStatus:SetDesc("Battle finished. Cooldown...")
+                    -- Use AutoReturn logic or just ExitBattle at start of next loop
+                    -- But let's press return to be nice
+                    AutoReturn()
+                    task.wait(0.5) -- Cooldown
+                else
+                    ABStatus:SetDesc("Failed to create battle. Retrying...")
+                    task.wait(2)
+                end
+            end
+             if not getgenv().AutoBattleActive then
+                ABStatus:SetDesc("Stopped.")
+             end
+        end)
+    else
+        ABStatus:SetDesc("Stopped.")
+    end
+end)
+
+
+-- ==============================================================================
+-- 3. ZAKĹADKA: INVENTORY
+-- ==============================================================================
+local SellStatusPara = Tabs.Inventory:AddParagraph({ Title = "Sell Status", Content = "Waiting..." })
+local InvStatsPara = Tabs.Inventory:AddParagraph({ Title = "Inventory Stats", Content = "Count: 0 | Value: 0.00PLN" })
+local InvListPara = Tabs.Inventory:AddParagraph({ Title = "Your Items", Content = "Click 'Refresh'..." })
+
+
+
+-- FAST SELL (Bulk)
+local function RunAutoSellFast()
+    local inv = Plr:FindFirstChild("PlayerData") and Plr.PlayerData:FindFirstChild("Inventory")
+    if not inv then return end
+    local itemsToSell = {}
+    local itemCount = 0
+    local itemCount = 0
+    local children = inv:GetChildren()
+    for i, item in ipairs(children) do
+        if i % 100 == 0 then task.wait() end -- Anti-Crash / Anti-Timeout
+        local name = item:GetAttribute("ItemId") or item.Name
+        if item:IsA("StringValue") then name = item.Value end
+        local wear = item:GetAttribute("Wear") 
+        if not wear and item:FindFirstChild("Wear") then wear = item.Wear.Value end
+        if type(wear) ~= "string" then wear = tostring(wear or "Factory New") end
+        local stat = item:GetAttribute("Stattrak")
+        if stat == nil and item:FindFirstChild("Stattrak") then stat = item.Stattrak.Value end
+        if stat == nil then stat = false end
+        local age = item:GetAttribute("Age")
+        if not age and item:FindFirstChild("Age") then age = item.Age.Value end
+        if not age then age = 0 end
+
+        table.insert(itemsToSell, { Name = name, Wear = wear, Stattrak = stat, Age = age })
+        itemCount = itemCount + 1
+    end
+
+    if itemCount > 0 then
+        SellStatusPara:SetDesc("⏳ Selling " .. itemCount .. " items (FAST)...")
+        local success, result = pcall(function() return Remotes.Sell:InvokeServer(itemsToSell) end)
+        if success then
+            SellStatusPara:SetDesc("✅ FAST Sell success!")
+        else
+            SellStatusPara:SetDesc("❌ FAST Sell Error: " .. tostring(result))
+        end
+        
+        if Plr.PlayerGui:FindFirstChild("Inventory") then
+            local cw = Plr.PlayerGui:FindFirstChild("CurrentWindow")
+            if cw and cw.Value == "Inventory" then
+                cw.Value = "Main"; task.wait(0.1); cw.Value = "Inventory"
+            end
+        end
+    else
+        SellStatusPara:SetDesc("ℹ️ Inventory empty.")
+    end
+end
+
+local ToggleAutoSellFast = Tabs.Inventory:AddToggle("AutoSellFastToggle", {Title = "⚡ AUTO SELL ALL (6s Delay)", Default = false })
+ToggleAutoSellFast:OnChanged(function()
+    getgenv().AutoSellFast = Options.AutoSellFastToggle.Value
+    
+    if getgenv().AutoSellFast then
+        local inv = Plr:FindFirstChild("PlayerData") and Plr.PlayerData:FindFirstChild("Inventory")
+        if inv then
+            -- Initial Run
+            task.spawn(function() RunAutoSellFast() end)
+            
+            -- Listener for new items
+            getgenv().SellDebounce = false
+            local conn = inv.ChildAdded:Connect(function()
+                if getgenv().AutoSellFast and not getgenv().SellDebounce then
+                    getgenv().SellDebounce = true
+                    SellStatusPara:SetDesc("Items detected... Waiting 6.8s")
+                    task.wait(6.8)
+                    RunAutoSellFast()
+                    getgenv().SellDebounce = false
+                end
+            end)
+            
+            -- Store connection to disconnect later if needed (optional, or just check flag inside)
+             -- Ideally we should manage connections but for this structure checking flag is enough.
+        end
+    end
+end)
+
+local ToggleSmartPrice = Tabs.Inventory:AddToggle("SmartPriceToggle", {Title = "💲 Smart Price Fetch", Description = "Opens inv briefly to fetch prices", Default = true })
+ToggleSmartPrice:OnChanged(function() getgenv().ForcePriceUpdate = Options.SmartPriceToggle.Value end)
+
+-- ==============================================================================
+-- SMART INVENTORY MANAGER (New Feature)
+-- ==============================================================================
+Tabs.Inventory:AddSection("Smart Inventory Manager")
+
+getgenv().MaxSellPrice = 1000
+getgenv().MinLockPrice = 50000
+
+local InputMaxSell = Tabs.Inventory:AddInput("MaxSellInput", {
+    Title = "Max Sell Price (Sell Below)",
+    Default = "1000",
+    Placeholder = "e.g. 500",
+    Numeric = true,
+    Finished = true,
+    Callback = function(Value)
+        getgenv().MaxSellPrice = tonumber(Value) or 1000
+    end
+})
+
+local InputMinLock = Tabs.Inventory:AddInput("MinLockInput", {
+    Title = "Min Lock Price (Lock Above)",
+    Default = "50000",
+    Placeholder = "e.g. 50000",
+    Numeric = true,
+    Finished = true,
+    Callback = function(Value)
+        getgenv().MinLockPrice = tonumber(Value) or 50000
+    end
+})
+
+local function RefreshInvList()
+     local inv = Plr:FindFirstChild("PlayerData") and Plr.PlayerData:FindFirstChild("Inventory")
+     if not inv then InvListPara:SetDesc("Inventory not found"); return end
+
+     if getgenv().ForcePriceUpdate then
+         local missing = false
+         local children = inv:GetChildren()
+         for i, item in ipairs(children) do
+             if i % 100 == 0 then task.wait() end -- Yield to prevent timeout
+             local n = item:GetAttribute("ItemId") or item.Name
+             if item:IsA("StringValue") then n = item.Value end
+             if not getgenv().PriceCache[n] then missing = true; break end
+         end
+
+         if missing then
+             local cw = Plr.PlayerGui:FindFirstChild("CurrentWindow")
+             if cw and cw.Value ~= "Inventory" then
+                 local oldWin = cw.Value
+                 cw.Value = "Inventory"
+                 task.wait(0.2)
+                 local win = Plr.PlayerGui:FindFirstChild("Windows")
+                 local cont = win and win:FindFirstChild("Inventory") and win.Inventory:FindFirstChild("InventoryFrame") and win.Inventory.InventoryFrame:FindFirstChild("Contents")
+                 if cont then
+                     for _, v in pairs(cont:GetChildren()) do
+                         if v:IsA("Frame") then
+                             local pVal = v:FindFirstChild("ItemValue") or (v:FindFirstChild("ItemTemplate") and v.ItemTemplate:FindFirstChild("ItemValue"))
+                             local attId = v:GetAttribute("ItemId")
+                             if pVal and attId then
+                                 getgenv().PriceCache[attId] = pVal.Text
+                                 local w = v:FindFirstChild("Wear")
+                                 if w then getgenv().PriceCache[attId.."_"..w.Text] = pVal.Text end
+                             end
+                         end
+                     end
+                 end
+                 cw.Value = oldWin
+             end
+         end
+     end
+
+     local items = {}
+     local c = 0
+     local children = inv:GetChildren()
+     for i, item in ipairs(children) do
+         if i % 100 == 0 then task.wait() end -- Yield
+         local name = item:GetAttribute("ItemId") or item.Name
+         if item:IsA("StringValue") then name = item.Value end
+         local wear = item:GetAttribute("Wear") or "N/A"
+         if item:FindFirstChild("Wear") then wear = item.Wear.Value end
+         local price = getgenv().PriceCache[name .. "_" .. wear] or getgenv().PriceCache[name] or "?"
+         local numPrice = 0
+         if price ~= "?" then local clean = price:gsub("[^%d%.]", ""); numPrice = tonumber(clean) or 0 end
+         
+         table.insert(items, { Txt = "📦 [" .. price .. "] " .. tostring(name) .. " [" .. tostring(wear) .. "]", Val = numPrice, Name = name })
+         c = c + 1
+     end
+    
+     if c == 0 then
+         InvListPara:SetDesc("No items.")
+         InvStatsPara:SetDesc("Count: 0 | Value: 0.00PLN")
+     else
+         table.sort(items, function(a, b) if a.Val == b.Val then return a.Name < b.Name end return a.Val > b.Val end)
+         local totalVal = 0
+         local finalLines = {}
+         for _, obj in ipairs(items) do 
+             table.insert(finalLines, obj.Txt)
+             totalVal = totalVal + obj.Val
+         end
+         InvListPara:SetDesc(table.concat(finalLines, "\n"))
+         InvStatsPara:SetDesc("Count: " .. c .. " | Total: " .. string.format("%.2fPLN", totalVal))
+     end
+end
+
+local SmartInventoryLoopRunning = false
+local function StartSmartInventoryLoop()
+    if SmartInventoryLoopRunning then return end
+    SmartInventoryLoopRunning = true
+    
+    task.spawn(function()
+        while getgenv().AutoSmartSell or getgenv().AutoLockItems do
+            local inv = Plr:FindFirstChild("PlayerData") and Plr.PlayerData:FindFirstChild("Inventory")
+            
+            if inv then
+                if getgenv().ForcePriceUpdate then RefreshInvList() end
+                
+                -- ==============================================================================
+                -- PHASE 1: AUTO LOCK (PRIORITY)
+                -- ==============================================================================
+                if getgenv().AutoLockItems then
+                     local lockLimit = getgenv().MinLockPrice or 50000
+                     local itemsLocked = 0
+                     local lockRemote = Remotes:FindFirstChild("ToggleLock")
+                     
+                     if lockRemote then
+                         for _, item in pairs(inv:GetChildren()) do
+                            local name = item:GetAttribute("ItemId") or item.Name
+                            if item:IsA("StringValue") then name = item.Value end
+                            
+                            local wear = item:GetAttribute("Wear")
+                            if not wear and item:FindFirstChild("Wear") then wear = item.Wear.Value end
+                            wear = tostring(wear or "Factory New")
+                            
+                            local priceStr = getgenv().PriceCache[name.."_"..wear] or getgenv().PriceCache[name] or "0"
+                            local price = tonumber((priceStr:gsub("[^%d%.]", ""))) or 0
+                            
+                            if price >= lockLimit then
+                                 local isLocked = false
+                                 if item:GetAttribute("Locked") == true then isLocked = true end
+                                 if item:GetAttribute("IsLocked") == true then isLocked = true end
+                                 if item:FindFirstChild("Locked") and item.Locked.Value == true then isLocked = true end
+                                 if item:FindFirstChild("IsLocked") and item.IsLocked.Value == true then isLocked = true end
+                                 
+                                 if not isLocked then
+                                     local stat = item:GetAttribute("Stattrak")
+                                     if stat == nil then stat = false end
+                                     
+                                     local age = item:GetAttribute("TimeObtained") or item:GetAttribute("Age")
+                                     if not age then age = 0 end
+                                     
+                                     local uuid = item:GetAttribute("UUID")
+                                     
+                                     local itemData = {
+                                         Name = name,
+                                         Wear = wear,
+                                         Stattrak = stat,
+                                         Age = age,
+                                         UUID = uuid,
+                                         Action = "Lock"
+                                     }
+                                     
+                                     pcall(function() 
+                                        lockRemote:FireServer({itemData}) 
+                                        itemsLocked = itemsLocked + 1
+                                     end)
+                                     task.wait(0.1) -- Fast lock
+                                 end
+                            end
+                         end
+                         if itemsLocked > 0 then SellStatusPara:SetDesc("🔒 Secured " .. itemsLocked .. " items first.") end
+                     end
+                end
+                
+                task.wait(1) -- Wait between Lock and Sell phases
+                
+                -- ==============================================================================
+                -- PHASE 2: AUTO SMART SELL (LOWER PRIORITY)
+                -- ==============================================================================
+                if getgenv().AutoSmartSell then
+                     local sellList = {}
+                     local maxPrice = getgenv().MaxSellPrice or 1000
+                     local minLock = getgenv().MinLockPrice or 50000
+                     
+                     for _, item in pairs(inv:GetChildren()) do
+                        local name = item:GetAttribute("ItemId") or item.Name
+                        if item:IsA("StringValue") then name = item.Value end
+                        
+                        local wear = item:GetAttribute("Wear")
+                        if not wear and item:FindFirstChild("Wear") then wear = item.Wear.Value end
+                        wear = tostring(wear or "Factory New")
+                        
+                        local priceStr = getgenv().PriceCache[name.."_"..wear] or getgenv().PriceCache[name] or "0"
+                        local price = tonumber((priceStr:gsub("[^%d%.]", ""))) or 0
+                        
+                        -- DOUBLE SAFETY: Only sell if < MaxSellPrice AND < MinLockPrice AND NOT Locked
+                        local isLocked = false
+                        if item:GetAttribute("Locked") == true then isLocked = true end
+                        if item:FindFirstChild("Locked") and item.Locked.Value == true then isLocked = true end
+                        
+                        if price > 0 and price < maxPrice and price < minLock and not isLocked then
+                            local stat = item:GetAttribute("Stattrak")
+                            if stat == nil and item:FindFirstChild("Stattrak") then stat = item.Stattrak.Value end
+                            if stat == nil then stat = false end
+                            
+                            local age = item:GetAttribute("Age")
+                            if not age and item:FindFirstChild("Age") then age = item.Age.Value end
+                            if not age then age = 0 end
+                            
+                            table.insert(sellList, { Name = name, Wear = wear, Stattrak = stat, Age = age })
+                        end
+                     end
+                     
+                     if #sellList > 0 then
+                        SellStatusPara:SetDesc("🧠 Selling " .. #sellList .. " items...")
+                        pcall(function() Remotes.Sell:InvokeServer(sellList) end)
+                     else
+                        SellStatusPara:SetDesc("✅ Manager Idle (Locked & Sold)")
+                     end
+                end
+            end
+            task.wait(5) -- Loop every 5s
+        end
+        SmartInventoryLoopRunning = false
+        SellStatusPara:SetDesc("Inventory Manager Stopped")
+    end)
+end
+
+local ToggleAutoSmartSell = Tabs.Inventory:AddToggle("AutoSmartSellToggle", { Title = "🧠 Auto Smart Sell (< Max Price)", Default = false })
+ToggleAutoSmartSell:OnChanged(function(Value)
+    getgenv().AutoSmartSell = Value
+    if Value then StartSmartInventoryLoop() end
+end)
+
+local ToggleAutoLock = Tabs.Inventory:AddToggle("AutoLockToggle", { Title = "🔒 Auto Lock (> Min Price)", Default = false })
+ToggleAutoLock:OnChanged(function(Value)
+    getgenv().AutoLockItems = Value
+    if Value then StartSmartInventoryLoop() end
+end)
+
+local ToggleAutoRefreshInv = Tabs.Inventory:AddToggle("AutoRefreshInvToggle", {Title = "🔄 Auto-Refresh Inventory (Every 1s)", Default = false })
+ToggleAutoRefreshInv:OnChanged(function()
+    getgenv().AutoRefreshInv = Options.AutoRefreshInvToggle.Value
+    if getgenv().AutoRefreshInv then
+        task.spawn(function()
+            while getgenv().AutoRefreshInv do RefreshInvList(); task.wait(1) end
+        end)
+    end
+end)
+
+-- Player Spy Section
+Tabs.Inventory:AddSection("Player Inventory Spy")
+
+local function GetInvSpyPlayers()
+   local temp = {}
+   for _, p in pairs(game:GetService("Players"):GetPlayers()) do table.insert(temp, p.Name) end
+   return temp
+end
+
+local DropdownInvSpy = Tabs.Inventory:AddDropdown("InvSpySelect", { Title = "Select Player", Values = GetInvSpyPlayers(), Multi = false, Default = 1 })
+local SpyStatusPara = Tabs.Inventory:AddParagraph({ Title = "Spy Result", Content = "Waiting..." })
+local SpyItemsPara = Tabs.Inventory:AddParagraph({ Title = "Items", Content = "..." })
+
+local function InspectTargetInv(targetName)
+   local t = game:GetService("Players"):FindFirstChild(targetName)
+   if not t then SpyStatusPara:SetDesc("Player left."); return end
+   local inv = t:FindFirstChild("PlayerData") and t.PlayerData:FindFirstChild("Inventory")
+   if not inv then SpyStatusPara:SetDesc("No inventory access."); return end
+   
+   local items = {}
+   local count = 0
+   for _, item in pairs(inv:GetChildren()) do
+       local n = item:GetAttribute("ItemId") or item.Name
+       if item:IsA("StringValue") then n = item.Value end
+       local w = item:GetAttribute("Wear")
+       if not w and item:FindFirstChild("Wear") then w = item.Wear.Value end
+       w = tostring(w or "N/A")
+       local price = getgenv().PriceCache[n .. "_" .. w] or getgenv().PriceCache[n] or "?"
+       local num = 0
+       if price ~= "?" then local c = price:gsub("[^%d%.]", ""); num = tonumber(c) or 0 end
+       table.insert(items, { Txt = "📦 [" .. price .. "] " .. n .. " (" .. w .. ")", Val = num, Name = n })
+       count = count + 1
+   end
+   if count > 0 then
+       table.sort(items, function(a,b) return a.Val > b.Val end)
+       local total = 0
+       local lines = {}
+       for _, i in ipairs(items) do total = total + i.Val; table.insert(lines, i.Txt) end
+       SpyStatusPara:SetDesc(targetName .. " | Count: " .. count .. " | Value: " .. string.format("%.2fPLN", total))
+       SpyItemsPara:SetDesc(table.concat(lines, "\n"))
+   else
+       SpyStatusPara:SetDesc(targetName .. " | Empty inventory.")
+       SpyItemsPara:SetDesc("No items.")
+   end
+end
+
+Tabs.Inventory:AddButton({ Title = "Inspect Selected Player", Callback = function() if Options.InvSpySelect.Value then InspectTargetInv(Options.InvSpySelect.Value) end end})
+Tabs.Inventory:AddButton({ Title = "Refresh Player List", Callback = function() DropdownInvSpy:SetValues(GetInvSpyPlayers()) end})
+
+-- ==============================================================================
+-- 4. ZAKŁADKA: WIN/LOSE & SPY
+-- ==============================================================================
+local MyStatsPara = Tabs.WinLose:AddParagraph({ Title = "My Stats Monitor", Content = "Waiting..." })
+local WinConnections = {}
+
+Tabs.WinLose:AddToggle("WinMonitorToggle", { Title = "WIN VISIBLE (Auto-Detect Win & Balance)", Default = false }):OnChanged(function(Value)
+    for _, c in pairs(WinConnections) do c:Disconnect() end
+    WinConnections = {}
+    
+    if Value then
+        MyStatsPara:SetDesc("ACTIVE (Monitoring...)")
+        local MyPlayerData = Plr:WaitForChild("PlayerData", 5)
+        local MyCurrencies = MyPlayerData and MyPlayerData:WaitForChild("Currencies", 5)
+        local MyBalance = MyCurrencies and MyCurrencies:WaitForChild("Balance", 5)
+        
+        if MyBalance then
+             MyStatsPara:SetTitle("Balance: " .. tostring(MyBalance.Value))
+             local balCon = MyBalance:GetPropertyChangedSignal("Value"):Connect(function()
+                 MyStatsPara:SetTitle("Balance: " .. tostring(MyBalance.Value))
+             end)
+             table.insert(WinConnections, balCon)
+        else
+             MyStatsPara:SetDesc("Error: Balance object missing")
+        end
+        
+        local MyInventory = MyPlayerData and MyPlayerData:WaitForChild("Inventory", 5)
+        if MyInventory then
+             local invCon = MyInventory.ChildAdded:Connect(function(NewItem)
+                 Fluent:Notify({ Title = "WIN! WIN! WIN!", Content = "You won: " .. tostring(NewItem.Name), Duration = 5 })
+                 
+                 
+                 -- Removed individual Win Webhook (User Request: Periodic Summary Only)
+             end)
+             table.insert(WinConnections, invCon)
+        end
+    else
+        MyStatsPara:SetDesc("Monitor Disabled")
+    end
+end)
+
+Tabs.WinLose:AddSection("Player Balance Spy")
+local SpyBalancePara = Tabs.WinLose:AddParagraph({ Title = "Player Balance", Content = "Select a player..." })
+local DropdownBalSpy = Tabs.WinLose:AddDropdown("BalSpySelect", { Title = "Select Player", Values = GetInvSpyPlayers(), Multi = false, Default = 1 })
+local SpyBalConnection = nil
+
+DropdownBalSpy:OnChanged(function(Value)
+    if SpyBalConnection then SpyBalConnection:Disconnect() SpyBalConnection = nil end
+    local pName = Value
+    local target = game:GetService("Players"):FindFirstChild(pName)
+    if target then
+        local tData = target:FindFirstChild("PlayerData")
+        local tCur = tData and tData:FindFirstChild("Currencies")
+        local tBal = tCur and tCur:FindFirstChild("Balance")
+        if tBal then
+            SpyBalancePara:SetDesc("💰 " .. pName .. ": " .. tostring(tBal.Value))
+            SpyBalConnection = tBal:GetPropertyChangedSignal("Value"):Connect(function()
+                 SpyBalancePara:SetDesc("💰 " .. pName .. ": " .. tostring(tBal.Value))
+            end)
+        else
+            SpyBalancePara:SetDesc("❌ Cannot read balance")
+        end
+    else
+        SpyBalancePara:SetDesc("❌ Player left")
+    end
+end)
+
+Tabs.WinLose:AddButton({ Title = "Refresh Player List", Callback = function() DropdownBalSpy:SetValues(GetInvSpyPlayers()) end})
+
+-- ==============================================================================
+-- 4.8 ZAKŁADKA: VISUAL / HUD
+-- ==============================================================================
+Tabs.Visual:AddParagraph({ Title = "Info", Content = "Zarządzaj elementami wizualnymi na ekranie." })
+
+local ToggleStarsHUD = Tabs.Visual:AddToggle("StarsHUDToggle", {Title = "⭐ Show Mantra HUD", Description = "Pokazuje małe okienko z Mantrą obok pieniędzy", Default = true })
+ToggleStarsHUD:OnChanged(function(Value)
+    getgenv().StarsHUDEnabled = Value
+    if not Value then UpdateStarsHUD("","") end -- Force cleanup
+end)
+
+
+
+-- ==============================================================================
+-- 4.5 ZAKŁADKA: MISC / EXTRA
+
+
+-- 2) MOVED AUTO LEVEL REWARDS
+Tabs.Misc:AddSection("Auto Level Rewards")
+local MiscLevelStatus = Tabs.Misc:AddParagraph({ Title = "Level Rewards Status", Content = "Disabled" })
+
+local SliderMaxLevel = Tabs.Misc:AddSlider("MaxLevelSlider", {
+    Title = "Max Level Target",
+    Description = "Script will claim rewards up to this level",
+    Default = 70,
+    Min = 10,
+    Max = 120,
+    Rounding = 0,
+    Callback = function(Value)
+        -- Snap to nearest 10
+        local step = 10
+        local snapped = math.floor(Value / step + 0.5) * step
+        if Value ~= snapped then
+            Options.MaxLevelSlider:SetValue(snapped)
+        end
+    end
+})
+
+local ToggleLevelRewardsMisc = Tabs.Misc:AddToggle("LevelRewardsToggleMisc", {Title = "🏆 Auto Level Rewards", Description = "Checks levels 10-Max every 10 mins", Default = false })
+ToggleLevelRewardsMisc:OnChanged(function()
+    getgenv().AutoLevelRewards = Options.LevelRewardsToggleMisc.Value
+    if getgenv().AutoLevelRewards then
+        task.spawn(function()
+            while getgenv().AutoLevelRewards do
+                local cycleStart = tick()
+                local maxLvl = Options.MaxLevelSlider.Value
+                -- Round to nearest 10 just in case
+                maxLvl = math.floor(maxLvl / 10) * 10
+                
+                MiscLevelStatus:SetDesc("START Level Rewards (10-"..maxLvl..")...")
+                getgenv().OpeningLevelCases = true
+                
+                for lvl = 10, maxLvl, 10 do
+                    if not getgenv().AutoLevelRewards then break end
+                    local id = "LEVEL" .. lvl
+                    MiscLevelStatus:SetDesc("Claiming Reward " .. id .. " (Safe Mode)...")
+                    
+                    -- Single attempt instead of spam
+                    pcall(function() Remotes.OpenCase:InvokeServer(id, 1, false, false) end)
+
+                    -- Wait 7 seconds before next request (Anti-Spam / Anti-Ban)
+                    for i = 1, 7 do
+                         if not getgenv().AutoLevelRewards then break end
+                         MiscLevelStatus:SetDesc("Claiming " .. id .. "... Waiting " .. (7 - i + 1) .. "s")
+                         task.wait(1)
+                    end
+                end
+                
+                getgenv().OpeningLevelCases = false
+                if not getgenv().AutoLevelRewards then break end
+                
+                local elapsed = tick() - cycleStart
+                local waitTime = 600 - elapsed -- 10 minutes loop
+                if waitTime < 0 then waitTime = 0 end
+                
+                MiscLevelStatus:SetDesc(string.format("Done. Waiting %.0fs...", waitTime))
+                local waitStart = tick()
+                while (tick() - waitStart) < waitTime do
+                    if not getgenv().AutoLevelRewards then break end
+                    if (tick() - waitStart) % 5 < 1 then
+                        local left = waitTime - (tick() - waitStart)
+                        MiscLevelStatus:SetDesc(string.format("Done. Waiting %.0fs...", left))
+                    end
+                    task.wait(1)
+                end
+            end
+            getgenv().OpeningLevelCases = false
+            MiscLevelStatus:SetDesc("Loop Ended.")
+        end)
+    else
+        getgenv().OpeningLevelCases = false
+        MiscLevelStatus:SetDesc("Disabled")
+    end
+end)
+
+
+
+-- ==============================================================================
+
+
+
+
+-- ==============================================================================
+-- SETTINGS & FINALIZE
+-- ==============================================================================
+
+-- AUTO REJOIN HANDLING
+local function AutoRejoin()
+    getgenv().KickReported = false
+    task.spawn(function()
+        while true do
+            task.wait(2)
+            if getgenv().AutoRejoin then
+                local prompt = game.CoreGui:FindFirstChild("RobloxPromptGui")
+                local overlay = prompt and prompt:FindFirstChild("promptOverlay")
+                if overlay and overlay:FindFirstChild("ErrorPrompt") then
+                    if not getgenv().KickReported then
+                        getgenv().KickReported = true
+                        if getgenv().WebhookEnabled then
+                            SendWebhook({
+                                ["title"] = "⚠️ DISCONNECTED / KICKED",
+                                ["description"] = "Wyjebało z gry! (Error Prompt Detected)\n**Próba ponownego dołączenia...** 🔄",
+                                ["color"] = 16711680, -- Red
+                                ["footer"] = { ["text"] = "Orynn Auto Rejoin" }
+                            })
+                            task.wait(1.5)
+                        end
+                    end
+                    game:GetService("TeleportService"):Teleport(game.PlaceId, game.Players.LocalPlayer)
+                end
+            end
+        end
+    end)
+    
+    -- Handle Check for Disconnect
+    game:GetService("CoreGui").RobloxPromptGui.ChildAdded:Connect(function(child)
+        if getgenv().AutoRejoin and child.Name == "ErrorPrompt" then
+             if not getgenv().KickReported then
+                getgenv().KickReported = true
+                if getgenv().WebhookEnabled then
+                    SendWebhook({
+                        ["title"] = "⚠️ DISCONNECTED / KICKED",
+                        ["description"] = "Wyjebało z gry! (Error Prompt Detected)\n**Próba ponownego dołączenia...** 🔄",
+                        ["color"] = 16711680,
+                        ["footer"] = { ["text"] = "Orynn Auto Rejoin" }
+                    })
+                    task.wait(1.5)
+                end
+             end
+             game:GetService("TeleportService"):Teleport(game.PlaceId, game.Players.LocalPlayer)
+        end
+    end)
+end
+AutoRejoin()
+
+Tabs.Settings:AddSection("Webhook Manager")
+Tabs.Settings:AddInput("WebhookUrlInput", {
+    Title = "Webhook URL",
+    Default = "",
+    Placeholder = "paste discord webhook here...",
+    Numeric = false,
+    Finished = false,
+    Callback = function(Value)
+        getgenv().WebhookUrl = Value
+    end
+})
+
+local SliderWebhookDelay = Tabs.Settings:AddSlider("WebhookDelay", {
+    Title = "Webhook Delay (Minutes)",
+    Description = "How often to send stats summary",
+    Default = 5,
+    Min = 1,
+    Max = 60,
+    Rounding = 0,
+    Callback = function(Value)
+        getgenv().WebhookDelayMinutes = Value
+    end
+})
+
+Tabs.Settings:AddToggle("WebhookToggle", { Title = "Enable Stats Webhook (Update)", Default = false }):OnChanged(function(Value)
+    getgenv().WebhookEnabled = Value
+    if Value then
+        task.spawn(function()
+            while getgenv().WebhookEnabled do
+                -- Send immediately first, then wait
+
+                if not getgenv().WebhookEnabled then break end
+                
+                local bal = 0
+                local tickets = 0
+                
+                local invCount = 0
+                local level = "N/A"
+                
+                local pd = Plr:FindFirstChild("PlayerData")
+                if pd then
+                    if pd:FindFirstChild("Currencies") then
+                        if pd.Currencies:FindFirstChild("Balance") then bal = pd.Currencies.Balance.Value end
+                        if pd.Currencies:FindFirstChild("Tickets") then tickets = pd.Currencies.Tickets.Value end
+                        if pd.Currencies:FindFirstChild("Level") then level = tostring(pd.Currencies.Level.Value) end
+                    end
+                    if pd:FindFirstChild("Inventory") then
+                        invCount = #pd.Inventory:GetChildren()
+                    end
+                end
+                
+                local sessDiff = tick() - startTime
+                local h = math.floor(sessDiff / 3600)
+                local m = math.floor((sessDiff % 3600) / 60)
+                local sessionStr = string.format("%dh %02dm", h, m)
+                
+                local questInfo = "None"
+                local qHolder = Plr.PlayerGui:FindFirstChild("Windows") and Plr.PlayerGui.Windows:FindFirstChild("Quests") and Plr.PlayerGui.Windows.Quests:FindFirstChild("QuestHolder")
+                if qHolder then
+                    local active = {}
+                    for _,v in pairs(qHolder:GetChildren()) do
+                         if v:IsA("Frame") and v:FindFirstChild("Title") then
+                              table.insert(active, v.Title.Text)
+                         end
+                    end
+                    if #active > 0 then questInfo = table.concat(active, "\n") end
+                end
+                
+                local keyStatus = "No Key"
+                if getgenv().SCRIPT_KEY then keyStatus = "Active" end
+
+                SendWebhook({
+                     ["title"] = "💎 Orynn Script | Stats Update",
+                     ["thumbnail"] = { ["url"] = "https://www.roblox.com/headshot-thumbnail/image?userId="..Plr.UserId.."&width=420&height=420&format=png" },
+                     ["fields"] = {
+                         { ["name"] = "⏱️ Session Time", ["value"] = sessionStr, ["inline"] = true },
+                         { ["name"] = "💰 Balance", ["value"] = tostring(bal).." PLN", ["inline"] = true },
+                         { ["name"] = "⭐ Mantra", ["value"] = tostring(tickets), ["inline"] = true },
+                         { ["name"] = "🎒 Inventory", ["value"] = tostring(invCount) .. " Items", ["inline"] = true },
+                         { ["name"] = "🆙 Level", ["value"] = level, ["inline"] = true },
+                         { ["name"] = "🔑 Key Status", ["value"] = keyStatus, ["inline"] = true },
+                         { ["name"] = "📜 Current Quests", ["value"] = questInfo, ["inline"] = false }
+                     },
+                     ["color"] = 10181046, -- Purple (Amethyst)
+                     ["footer"] = { ["text"] = "Orynn Case Paradise Script | " .. os.date("%X"), ["icon_url"] = "https://i.imgur.com/8QZ8Z9M.png" }
+                })
+                
+                -- Wait before next loop
+                local delay = (getgenv().WebhookDelayMinutes or 5) * 60
+                task.wait(delay)
+            end
+        end)
+    end
+end)
+
+Tabs.Settings:AddButton({
+    Title = "Test Webhook",
+    Description = "Sends a test message to check if it works.",
+    Callback = function()
+        if getgenv().WebhookUrl and getgenv().WebhookUrl ~= "" then
+            -- Gather stats (Same logic as main loop)
+            local bal = 0
+            local tickets = 0
+            local invCount = 0
+            local level = "N/A"
+            
+            local pd = Plr:FindFirstChild("PlayerData")
+            if pd then
+                if pd:FindFirstChild("Currencies") then
+                    if pd.Currencies:FindFirstChild("Balance") then bal = pd.Currencies.Balance.Value end
+                    if pd.Currencies:FindFirstChild("Tickets") then tickets = pd.Currencies.Tickets.Value end
+                    if pd.Currencies:FindFirstChild("Level") then level = tostring(pd.Currencies.Level.Value) end
+                end
+                if pd:FindFirstChild("Inventory") then
+                    invCount = #pd.Inventory:GetChildren()
+                end
+            end
+            
+            local sessDiff = tick() - startTime
+            local h = math.floor(sessDiff / 3600)
+            local m = math.floor((sessDiff % 3600) / 60)
+            local sessionStr = string.format("%dh %02dm", h, m)
+            
+            local questInfo = "None"
+            local qHolder = Plr.PlayerGui:FindFirstChild("Windows") and Plr.PlayerGui.Windows:FindFirstChild("Quests") and Plr.PlayerGui.Windows.Quests:FindFirstChild("QuestHolder")
+            if qHolder then
+                local active = {}
+                for _,v in pairs(qHolder:GetChildren()) do
+                        if v:IsA("Frame") and v:FindFirstChild("Title") then
+                            table.insert(active, v.Title.Text)
+                        end
+                end
+                if #active > 0 then questInfo = table.concat(active, "\n") end
+            end
+            
+            local keyStatus = "No Key"
+            if getgenv().SCRIPT_KEY then keyStatus = "Active" end
+
+            SendWebhook({
+                    ["title"] = "💎 Orynn's Script | Stats Update (TEST)",
+                    ["thumbnail"] = { ["url"] = "https://www.roblox.com/headshot-thumbnail/image?userId="..Plr.UserId.."&width=420&height=420&format=png" },
+                    ["fields"] = {
+                        { ["name"] = "⏱️ Session Time", ["value"] = sessionStr, ["inline"] = true },
+                        { ["name"] = "💰 Balance", ["value"] = tostring(bal).." PLN", ["inline"] = true },
+                        { ["name"] = "⭐ Mantra", ["value"] = tostring(tickets), ["inline"] = true },
+                        { ["name"] = "🎒 Inventory", ["value"] = tostring(invCount) .. " Items", ["inline"] = true },
+                        { ["name"] = "🆙 Level", ["value"] = level, ["inline"] = true },
+                        { ["name"] = "🔑 Key Status", ["value"] = keyStatus, ["inline"] = true },
+                        { ["name"] = "📜 Current Quests", ["value"] = questInfo, ["inline"] = false }
+                    },
+                    ["color"] = 16755200, -- Orange for Test
+                    ["footer"] = { ["text"] = "Orynn Case Paradise Script | TEST | " .. os.date("%X"), ["icon_url"] = "https://i.imgur.com/8QZ8Z9M.png" }
+            })
+            Fluent:Notify({ Title = "Sent", Content = "Test stats sent!", Duration = 3 })
+        else
+            Fluent:Notify({ Title = "Error", Content = "Please enter a Webhook URL first.", Duration = 3 })
+        end
+    end
+})
+
+Tabs.Settings:AddButton({
+    Title = "Simulate Rejoin / Kick",
+    Description = "Trigger artificial rejoin to test config/webhook.",
+    Callback = function()
+        Fluent:Notify({ Title = "Rejoin Test", Content = "Simulating kick & rejoin in 2s...", Duration = 2 })
+        task.wait(2)
+        
+        if getgenv().WebhookEnabled then
+             SendWebhook({
+                 ["title"] = "⚠️ SIMULATED KICK",
+                 ["description"] = "Symulacja wywalenia z gry (Test Config).\n**Próba ponownego dołączenia...** 🔄",
+                 ["color"] = 16711680,
+                 ["footer"] = { ["text"] = "Rejoin Test" }
+             })
+             task.wait(1.5)
+        end
+        
+        game:GetService("TeleportService"):Teleport(game.PlaceId, game.Players.LocalPlayer)
+    end
+})
+
+-- KONFIGURACJA AUTO EXECUTE (DLA GRACZY / PUBLIC RELEASE)
+-- Wpisz tu link do surowego kodu (Raw), np. "https://raw.githubusercontent.com/User/Repo/main/script.lua"
+-- Jeśli to pole jest wypełnione, skrypt użyje go do Auto Execute (nie trzeba pliku na dysku).
+-- Jeśli jest puste (""), skrypt będzie szukać pliku "CaseParadiseSCRIPT.lua" w workspace (Tryb Testowy).
+local ScriptLoaderURL = "https://raw.githubusercontent.com/Orynnek/Scripts/refs/heads/main/lolek" 
+
+-- QUEUE ON TELEPORT (Auto Execute on Server Switch)
+local scriptFileName = "CaseParadiseSCRIPT.lua"
+
+-- Logic: Check if we are in Dev Mode (No URL) and warn if file missing
+if ScriptLoaderURL == "" and isfile then
+    if not isfile(scriptFileName) and isfile("CaseParadiseSCRIPT.txt") then
+        scriptFileName = "CaseParadiseSCRIPT.txt"
+    end
+    
+    if not isfile(scriptFileName) then
+        task.spawn(function()
+            task.wait(4)
+            Fluent:Notify({
+                Title = "DEV MODE: File Missing",
+                Content = "Save script to workspace as '"..scriptFileName.."' OR set ScriptLoaderURL in code.",
+                Duration = 10
+            })
+        end)
+    end
+end
+
+if (queue_on_teleport) then
+    local qScript = ""
+    
+    if ScriptLoaderURL ~= "" then
+        -- MODE 1: URL Auto Execute (User Friendly)
+        qScript = [[
+            if not game:IsLoaded() then game.Loaded:Wait() end
+            task.wait(3)
+            pcall(function() loadstring(game:HttpGet("]] .. ScriptLoaderURL .. [["))() end)
+        ]]
+        
+        task.spawn(function()
+             task.wait(2)
+             Fluent:Notify({ Title = "Auto Exec Armed (URL)", Content = "Next load: Cloud Script", Duration = 5 })
+        end)
+    else
+        -- MODE 2: File Auto Execute (Dev Local)
+        qScript = [[
+            local fname = "]] .. scriptFileName .. [[" 
+            if not game:IsLoaded() then game.Loaded:Wait() end
+            task.wait(3)
+            -- print("ORYNN: Auto Exec starting with " .. fname)
+            
+            local success, err = pcall(function()
+                if isfile(fname) then
+                    loadstring(readfile(fname))()
+                else
+                    -- warn("ORYNN: File '" .. fname .. "' missing during auto-exec!")
+                end
+            end)
+            -- if not success then warn("ORYNN: AE Error: " .. tostring(err)) end
+        ]]
+        
+        task.spawn(function()
+             task.wait(2)
+             Fluent:Notify({ Title = "Auto Exec Armed (Local)", Content = "Next load: Local File ("..scriptFileName..")", Duration = 5 })
+        end)
+    end
+    
+    queue_on_teleport(qScript)
+else
+    task.spawn(function()
+        task.wait(2)
+        Fluent:Notify({
+            Title = "Warning",
+            Content = "Your executor doesn't support queue_on_teleport!",
+            Duration = 5
+        })
+    end)
+end
+
+local InputPSLink = Tabs.Settings:AddInput("PrivateServerLink", {
+    Title = "Private Server Link (Optional)",
+    Default = "",
+    Placeholder = "https://www.roblox.com/games/...",
+    Numeric = false,
+    Finished = true,
+    Callback = function(Value)
+        getgenv().PrivateServerLink = Value
+    end
+})
+
+-- Handle PS Link Rejoin Logic Globally
+getgenv().PerformRejoin = function()
+    local psLink = getgenv().PrivateServerLink
+    if psLink and psLink ~= "" and psLink:find("privateServerLinkCode") then
+         -- Try reliable way:
+         local code = psLink:match("privateServerLinkCode=([^&]+)")
+         if code then
+             game:GetService("TeleportService"):TeleportToPrivateServer(game.PlaceId, code, {game.Players.LocalPlayer})
+             return
+         end
+    end
+    
+    -- Fallback to simple Rejoin
+    game:GetService("TeleportService"):Teleport(game.PlaceId, game.Players.LocalPlayer)
+end
+
+
+
+Tabs.Settings:AddSection("Performance & Optimization")
+Tabs.Settings:AddToggle("PerfMode", { Title = "Performance Mode (FPS Boost)", Default = false }):OnChanged(function(Value)
+    local l = game.Lighting
+    local runService = game:GetService("RunService")
+    local players = game:GetService("Players")
+    local plr = players.LocalPlayer
+    local pg = plr:WaitForChild("PlayerGui")
+
+    if Value then
+        -- ENABLE
+        getgenv().PerfModeActive = true
+        local startTime = tick()
+        
+        -- Create UI
+        local screen = Instance.new("ScreenGui")
+        screen.Name = "OrynnPerfMode"
+        screen.IgnoreGuiInset = true
+        screen.ResetOnSpawn = false
+        screen.DisplayOrder = 99999
+        screen.Parent = pg
+        
+        -- Background (Deep Dark Gradient)
+        local bg = Instance.new("Frame")
+        bg.Size = UDim2.fromScale(1, 1)
+        bg.BackgroundColor3 = Color3.fromRGB(10, 10, 15)
+        bg.BorderSizePixel = 0
+        bg.Parent = screen
+        
+        local grad = Instance.new("UIGradient")
+        grad.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(15, 15, 25)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(5, 5, 10))
+        })
+        grad.Rotation = 45
+        grad.Parent = bg
+        
+        -- Main Container
+        local main = Instance.new("Frame")
+        main.Size = UDim2.fromOffset(700, 450)
+        main.Position = UDim2.fromScale(0.5, 0.5)
+        main.AnchorPoint = Vector2.new(0.5, 0.5)
+        main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+        main.BackgroundTransparency = 0.5
+        main.Parent = screen
+        
+        local uiCorner = Instance.new("UICorner", main)
+        uiCorner.CornerRadius = UDim.new(0, 16)
+        
+        local uiStroke = Instance.new("UIStroke", main)
+        uiStroke.Color = Color3.fromRGB(60, 60, 60)
+        uiStroke.Thickness = 1
+        
+        -- Header
+        local title = Instance.new("TextLabel")
+        title.Text = "ACTIVE AFK SESSION"
+        title.Font = Enum.Font.GothamBlack
+        title.TextSize = 28
+        title.TextColor3 = Color3.fromRGB(255, 255, 255)
+        title.Size = UDim2.new(1, 0, 0, 50)
+        title.BackgroundTransparency = 1
+        title.Parent = main
+        
+        local subTitle = Instance.new("TextLabel")
+        subTitle.Text = "Rendering paused to save resources"
+        subTitle.Font = Enum.Font.Gotham
+        subTitle.TextSize = 14
+        subTitle.TextColor3 = Color3.fromRGB(150, 150, 150)
+        subTitle.Size = UDim2.new(1, 0, 0, 20)
+        subTitle.Position = UDim2.new(0, 0, 0, 40)
+        subTitle.BackgroundTransparency = 1
+        subTitle.Parent = main
+
+        -- Stats Grid
+        local grid = Instance.new("Frame")
+        grid.Size = UDim2.new(0.9, 0, 0.45, 0) -- Reduced height for top 4 cards
+        grid.Position = UDim2.new(0.05, 0, 0.2, 0)
+        grid.BackgroundTransparency = 1
+        grid.Parent = main
+        
+        local gridLayout = Instance.new("UIGridLayout", grid)
+        gridLayout.CellSize = UDim2.new(0.48, 0, 0.45, 0)
+        gridLayout.CellPadding = UDim2.new(0.04, 0, 0.05, 0)
+        
+        local function createCard(name, icon, parent)
+            local card = Instance.new("Frame")
+            card.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+            Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+            Instance.new("UIStroke", card).Color = Color3.fromRGB(50, 50, 60)
+            card.Parent = parent or grid
+            
+            local lTitle = Instance.new("TextLabel")
+            lTitle.Text = name
+            lTitle.Font = Enum.Font.GothamBold
+            lTitle.TextColor3 = Color3.fromRGB(120, 120, 130)
+            lTitle.TextSize = 12
+            lTitle.Size = UDim2.new(1, -20, 0, 20)
+            lTitle.Position = UDim2.new(0, 15, 0, 10)
+            lTitle.BackgroundTransparency = 1
+            lTitle.TextXAlignment = Enum.TextXAlignment.Left
+            lTitle.Parent = card
+            
+            local lValue = Instance.new("TextLabel")
+            lValue.Name = "ValueLabel"
+            lValue.Text = "Loading..."
+            lValue.Font = Enum.Font.GothamBlack
+            lValue.TextColor3 = Color3.fromRGB(240, 240, 240)
+            lValue.TextSize = 18 -- Slightly smaller for multi-line
+            lValue.Size = UDim2.new(1, -20, 0, 30)
+            lValue.Position = UDim2.new(0, 15, 0.4, 0)
+            lValue.BackgroundTransparency = 1
+            lValue.TextXAlignment = Enum.TextXAlignment.Left
+            lValue.Parent = card
+            
+            local lIcon = Instance.new("TextLabel")
+            lIcon.Text = icon
+            lIcon.TextSize = 30
+            lIcon.BackgroundTransparency = 1
+            lIcon.Size = UDim2.new(0, 40, 0, 40)
+            lIcon.Position = UDim2.new(1, -10, 0, 10)
+            lIcon.AnchorPoint = Vector2.new(1, 0)
+            lIcon.Parent = card
+            
+            return lValue
+        end
+        
+        local mantraLabel = createCard("MANTRA (TICKETS)", "⭐")
+        local moneyLabel = createCard("BALANCE", "💰")
+        local timeLabel = createCard("SESSION TIME", "⏱️")
+        local statusLabel = createCard("ENABLED FEATURES", "⚙️")
+        
+        
+        -- Disable Rendering
+        runService:Set3dRenderingEnabled(false)
+        l.GlobalShadows = false
+        l.Brightness = 0
+        if StarsHUDGui then StarsHUDGui.Enabled = false end
+        
+        -- Update Loop
+        task.spawn(function()
+            local startMantra = 0
+            local pd = plr:FindFirstChild("PlayerData")
+            if pd and pd:FindFirstChild("Currencies") and pd.Currencies:FindFirstChild("Tickets") then
+                startMantra = pd.Currencies.Tickets.Value
+            end
+
+            while getgenv().PerfModeActive and screen.Parent do
+                 -- Update Time
+                 local diff = tick() - startTime
+                 local h = math.floor(diff / 3600)
+                 local m = math.floor((diff % 3600) / 60)
+                 local s = math.floor(diff % 60)
+                 timeLabel.Text = string.format("%02d:%02d:%02d", h, m, s)
+                 
+                 -- Update Stats
+                 if pd and pd:FindFirstChild("Currencies") then
+                      local t = pd.Currencies:FindFirstChild("Tickets")
+                      local b = pd.Currencies:FindFirstChild("Balance")
+                      
+                      if t then
+                          local current = t.Value
+                          local gain = current - startMantra
+                          local rate = 0
+                          if diff > 10 and gain > 0 then rate = math.floor((gain/diff) * 3600) end
+                          
+                          local function f(n) return tostring(n):reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", "") end
+                          mantraLabel.Text = f(current) .. "\n(+" .. f(rate) .. "/h)"
+                      end
+                      
+                      if b then
+                           local val = b.Value
+                           local mainV = math.floor(val)
+                           local dec = math.floor((val - mainV) * 100)
+                           moneyLabel.Text = string.format("%s.%02d PLN", tostring(mainV):reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", ""), dec)
+                      end
+                 end
+                 
+                 -- Update Enabled Features
+                 local feats = {}
+                 if getgenv().AutoQuest then table.insert(feats, "Auto Quest") end
+                 if getgenv().AutoOpenActive then table.insert(feats, "Auto Open") end
+                 if getgenv().AutoExchange then table.insert(feats, "Exchange") end
+                 if getgenv().AutoSellFast then table.insert(feats, "Auto Sell") end
+                 if getgenv().AutoClickerEnabled then table.insert(feats, "Anti AFK") end
+                 if getgenv().AutoLevelRewards then table.insert(feats, "Lvl Rewards") end
+                 
+                 if #feats == 0 then statusLabel.Text = "None"
+                 else statusLabel.Text = table.concat(feats, ", ") end
+                 
+                 task.wait(1)
+            end
+        end)
+        
+        Fluent:Notify({Title="Performance Mode", Content="Enabled - Rendering Disabled", Duration=3})
+        
+    else
+        -- DISABLE
+        getgenv().PerfModeActive = false
+        if pg:FindFirstChild("OrynnPerfMode") then pg.OrynnPerfMode:Destroy() end
+        
+        runService:Set3dRenderingEnabled(true)
+        l.GlobalShadows = true
+        l.Brightness = 2
+        
+        if StarsHUDGui then StarsHUDGui.Enabled = true end
+        Fluent:Notify({Title="Performance Mode", Content="Disabled - Rendering Restored", Duration=3})
+    end
+end)
+
+
+
+
+
+SaveManager:SetLibrary(Fluent)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetFolder("OrynnCaseParadise")
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+InterfaceManager:SetLibrary(Fluent)
+InterfaceManager:SetFolder("OrynnCaseParadise")
+InterfaceManager:BuildInterfaceSection(Tabs.Settings)
+
+
+Window:SelectTab(1)
+
+Fluent:Notify({
+    Title = "Orynn Script Loaded",
+    Content = "Professional GUI loaded successfully.",
+    Duration = 5
+})
+
+SaveManager:LoadAutoloadConfig()
+
+Window:SelectTab(1)
+
+-- USTAW AKCENT KOLORYSTYCZNY (CYAN) NA TWARDY SPOSÓB JEŚLI DOMYŚLNY "DARK" SIĘ NIE PODOBA
+Fluent:SetTheme("Dark")
+-- Można tu dodać kod wymuszający konkretny kolor akcentu w configu, ale "Dark" domyślnie ma niebieski/szary. 
+-- Aby uzyskać "Neon Blue", użytkownik może zmienić to w zakładce Settings (Theme Manager -> Accent Color).
+
+
+-- ==============================================================================
+-- 6. ZAKŁADKA: EXCHANGE (AUTO QUEST) -> Moved to Misc Tab
+-- ==============================================================================
+-- Assign to Misc tab as requested
+Tabs.Exchange = Tabs.Misc 
+
+Tabs.Exchange:AddSection("Auto Exchange Manager")
+
+
+-- Case Mapping (Manual Config based on user info)
+local ExchangeCaseMap = {
+    -- ValentineCase items
+    ["HEARTS"] = "ValentineCase",
+    ["CUPID"] = "ValentineCase",
+    ["FOREVER"] = "ValentineCase",
+
+    -- HolyCase items
+    ["RESURRECTION"] = "HolyCase",
+    ["BAYONET"] = "HolyCase",
+    ["LOSTSOULS"] = "HolyCase",
+    ["MALTHEISM"] = "HolyCase",
+
+    -- COBALT
+    ["ICARUSFELL"] = "COBALT",
+
+    -- ELEMENTAL
+    ["REEFGRIEF"] = "ELEMENTAL"
+} 
+
+
+local ExchStatus = Tabs.Exchange:AddParagraph({ Title = "Status", Content = "Idle" })
+local ExchangeProgressLabel = Tabs.Exchange:AddParagraph({ Title = "Progress", Content = "Waiting for scan..." })
+
+local function GetExchangeProgress()
+    local reqFolder = Plr.PlayerGui.Windows.Exchange.Items.Requirements
+    local progressData = {}
+    local activeTask = nil
+    
+    local debugTxt = ""
+    
+    for i = 1, 8 do
+        local reqStr = tostring(i)
+        local reqObj = reqFolder:FindFirstChild(reqStr)
+        
+        if reqObj then
+            local skinName = reqObj.Value -- e.g. "AWP_Asiimov"
+            local needed = reqObj:GetAttribute("Amount") or 1
+            
+            -- Check current progress in PlayerData (Items already exchanged)
+            local collectedFolder = Plr.PlayerData.Exchange:FindFirstChild(reqStr)
+            local current = collectedFolder and #collectedFolder:GetChildren() or 0
+            
+            -- Check Inventory for items waiting to be exchanged
+            local invCount = 0
+            for _, v in pairs(Plr.PlayerData.Inventory:GetChildren()) do
+                local vName = v:IsA("StringValue") and v.Value or v.Name
+                if vName == skinName then invCount = invCount + 1 end
+            end
+            
+            local total = current + invCount -- We have this many total
+             
+            local isComplete = (total >= needed) 
+            
+            local cleanSkin = skinName:upper():gsub("_", ""):gsub(" ", "")
+            
+            -- Try exact map match with new clean key
+            local caseName = nil
+            for key, val in pairs(ExchangeCaseMap) do
+                if cleanSkin:find(key) then 
+                    caseName = val 
+                    break 
+                end
+            end
+            
+            -- Fallback: Use standard box finder if custom map fails
+            if not caseName then
+                 caseName = GetBoxID(skinName)
+                 if caseName == "PERCHANCE" then caseName = nil end -- GetBoxID default is mostly wrong for skins
+            end
+            
+            if not caseName then caseName = "???" end
+            
+            -- Shows TOTAL (Inv + Exchange) directly
+            local statusLine = string.format("[%d] %s: %d/%d -> %s\n", i, skinName, total, needed, isComplete and "DONE" or caseName)
+            debugTxt = debugTxt .. statusLine
+            
+            -- Set Active Task to the FIRST incomplete item
+            if not isComplete and not activeTask then
+                activeTask = {
+                    Index = i,
+                    Skin = skinName,
+                    Needed = needed,
+                    Have = total,
+                    Case = caseName
+                }
+            end
+        end
+    end
+    
+    ExchangeProgressLabel:SetDesc(debugTxt)
+    return activeTask
+end
+
+local ToggleAutoExchange = Tabs.Exchange:AddToggle("AutoExchangeToggle", { Title = "📦 Auto Open for Exchange", Default = false })
+local ActiveExchangeTask = nil
+
+-- UI & Logic Loop
+ToggleAutoExchange:OnChanged(function()
+    getgenv().AutoExchange = Options.AutoExchangeToggle.Value
+    
+    if getgenv().AutoExchange then
+        -- Thread 1: UI Updater (Fast)
+        task.spawn(function()
+            while getgenv().AutoExchange do
+                -- This function updates the Progress Label AND returns the current task
+                ActiveExchangeTask = GetExchangeProgress()
+                
+                if ActiveExchangeTask then
+                    if ActiveExchangeTask.Case == "???" then
+                         ExchStatus:SetDesc("Unknown Case! Check Map.")
+                    else
+                         ExchStatus:SetDesc("Opening " .. ActiveExchangeTask.Case .. " for " .. ActiveExchangeTask.Skin .. "\nProgress: " .. ActiveExchangeTask.Have .. "/" .. ActiveExchangeTask.Needed)
+                    end
+                else
+                    ExchStatus:SetDesc("All Requirements Met!")
+                end
+                
+                task.wait(0.1) -- Updates UI every 0.1s
+            end
+        end)
+        
+        -- Thread 2: Opener (Standard / Stable)
+        task.spawn(function()
+            while getgenv().AutoExchange do
+                if ActiveExchangeTask and ActiveExchangeTask.Case ~= "???" then
+                    pcall(function()
+                        -- WILD MODE LOGIC (Same as Auto Opening)
+                        local box = ActiveExchangeTask.Case
+                        local w = false
+                        
+                        -- Check if we should use Wild Mode (from mapping or override)
+                        if box == "COBALT" or box == "ValentineCase" then 
+                             -- Check overrides
+                             if box == "COBALT" then w = true end -- Icarus Fell is always WILD
+                             -- For Valentine, user didn't explicitly say WILD but it doesn't hurt to check if allowed
+                        end
+
+                        if w and not CanWild(box) then w = false end
+                        
+                        -- Special Handling for Star Gazing (Try all known variants to be safe)
+                        if box == "STAR GAZING" then
+                             -- Try multiple variants because internal names are tricky
+                             task.spawn(function() Remotes.OpenCase:InvokeServer("StarGazingCase", 5, true, false) end)
+                        else
+                             Remotes.OpenCase:InvokeServer(box, 5, true, w)
+                        end
+                    end)
+                end
+                task.wait(3.3) -- MATCHED TIMING WITH AUTO OPENING (3.3s)
+            end
+            ExchStatus:SetDesc("Disabled.")
+        end)
+    else
+        ExchStatus:SetDesc("Disabled.")
+    end
+end)
+
+Tabs.Exchange:AddButton({ Title = "Refresh GUI Scan", Callback = function() GetExchangeProgress() end })
+
+local function ToggleOrynnGUI()
+    local coreGui = game:GetService("CoreGui")
+    local playerGui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    local guiName = "OrynnToggleUI" -- Skip our own button
+    local titleToFind = "Auto Quest | by ORYNN"
+    
+    local found = false
+    local targets = {coreGui, playerGui}
+    
+    for _, root in pairs(targets) do
+        for _, child in ipairs(root:GetChildren()) do
+            if child:IsA("ScreenGui") and child.Name ~= guiName then
+                local labels = child:GetDescendants()
+                for _, desc in ipairs(labels) do
+                    if desc:IsA("TextLabel") and desc.Text:find(titleToFind) then
+                        child.Enabled = not child.Enabled
+                        -- print("ORYNN: Toggled UI (" .. tostring(child.Enabled) .. ")")
+                        found = true
+                        break
+                    end
+                end
+            end
+            if found then break end
+        end
+        if found then break end
+    end
+    
+    if not found then
+        -- print("ORYNN: GUI not found, trying Fallback Key...")
+        -- Fallback to library bind if search fails
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true, Enum.KeyCode.RightControl, false, game)
+        task.wait(0.5)
+        vim:SendKeyEvent(false, Enum.KeyCode.RightControl, false, game)
+    end
+end
+
+local function CreateMobileButton()
+    -- print("ORYNN BUTTON: Initializing...")
+    local coreGui = game:GetService("CoreGui")
+    local playerGui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    
+    -- Try CoreGui first for Button, fallback to PlayerGui
+    local parent = coreGui
+    pcall(function() local t = Instance.new("ScreenGui", coreGui); t:Destroy() end)
+    
+    local guiName = "OrynnToggleUI"
+    if parent:FindFirstChild(guiName) then parent[guiName]:Destroy() end
+    
+    local screen = Instance.new("ScreenGui")
+    screen.Name = guiName
+    screen.Parent = parent
+    screen.DisplayOrder = 10000 
+    
+    local btn = Instance.new("TextButton")
+    btn.Name = "Toggle"
+    btn.Parent = screen
+    btn.BackgroundColor3 = Color3.fromRGB(40, 40, 40)
+    btn.BackgroundTransparency = 0.2
+    btn.Position = UDim2.new(0.5, -25, 0.15, 0)
+    btn.Size = UDim2.new(0, 50, 0, 50)
+    btn.Text = "LSH"
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBlack
+    btn.TextSize = 18
+    
+    local uiStroke = Instance.new("UIStroke"); uiStroke.Parent = btn
+    uiStroke.Color = Color3.fromRGB(0, 255, 255); uiStroke.Thickness = 2
+    local uiCorner = Instance.new("UICorner"); uiCorner.CornerRadius = UDim.new(0, 8); uiCorner.Parent = btn
+
+    -- Dragging
+    local dragging, dragInput, dragStart, startPos
+    btn.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; dragStart = input.Position; startPos = btn.Position
+            input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
+        end
+    end)
+    btn.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end
+    end)
+    game:GetService("UserInputService").InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset+delta.Y)
+        end
+    end)
+    
+    -- Click -> Virtual Key Press (Left Control) to toggle Fluent natively
+    btn.Activated:Connect(function()
+        local vim = game:GetService("VirtualInputManager")
+        vim:SendKeyEvent(true, Enum.KeyCode.LeftControl, false, game)
+        task.wait(0.5)
+        vim:SendKeyEvent(false, Enum.KeyCode.LeftControl, false, game)
+    end)
+    
+    -- AFK BAR UI
+    -- Container for the AFK bar
+    local afkContainer = Instance.new("Frame")
+    afkContainer.Name = "AFKStatusContainer"
+    afkContainer.Parent = screen
+    -- Positioning near top-right (roughly simply to the left of typical top-right buttons)
+    afkContainer.Position = UDim2.new(1, -340, 0, -35) 
+    afkContainer.Size = UDim2.new(0, 180, 0, 36)
+    afkContainer.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    afkContainer.BackgroundTransparency = 0.3
+    
+    local afkCorner = Instance.new("UICorner"); afkCorner.CornerRadius = UDim.new(0, 6); afkCorner.Parent = afkContainer
+    local afkStroke = Instance.new("UIStroke"); afkStroke.Parent = afkContainer; afkStroke.Color = Color3.fromRGB(60,60,60); afkStroke.Thickness = 1.5
+
+    local afkTitle = Instance.new("TextLabel")
+    afkTitle.Parent = afkContainer
+    afkTitle.Size = UDim2.new(1, 0, 0, 14)
+    afkTitle.Position = UDim2.new(0, 0, 0, 2)
+    afkTitle.BackgroundTransparency = 1
+    afkTitle.Text = "ANTI-AFK SYSTEM"
+    afkTitle.TextColor3 = Color3.fromRGB(200, 200, 200)
+    afkTitle.Font = Enum.Font.GothamBold
+    afkTitle.TextSize = 10
+
+    local barBg = Instance.new("Frame")
+    barBg.Name = "BarBackground"
+    barBg.Parent = afkContainer
+    barBg.Position = UDim2.new(0, 10, 0, 18)
+    barBg.Size = UDim2.new(1, -20, 0, 10)
+    barBg.BackgroundColor3 = Color3.fromRGB(10, 10, 10)
+    
+    local barBgCorner = Instance.new("UICorner"); barBgCorner.CornerRadius = UDim.new(1, 0); barBgCorner.Parent = barBg
+    
+    local barFill = Instance.new("Frame")
+    barFill.Name = "BarFill"
+    barFill.Parent = barBg
+    barFill.Size = UDim2.new(0, 0, 1, 0)
+    barFill.BackgroundColor3 = Color3.fromRGB(255, 0, 0) -- Starts Red
+    barFill.BorderSizePixel = 0
+    
+    local barFillCorner = Instance.new("UICorner"); barFillCorner.CornerRadius = UDim.new(1, 0); barFillCorner.Parent = barFill
+
+    -- Make LSH button slightly to the left
+    btn.Position = UDim2.new(0.5, -25, 0.15, 0)
+    
+    -- EXPORT UI ELEMENTS FOR LOGIC
+    getgenv().AFK_BAR_FILL = barFill
+end
+
+-- 1. Create Button (and Bar)
+CreateMobileButton()
+
+-- 2. Smart Anti-AFK Integration with Visual Bar
+task.spawn(function()
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    local UserInputService = game:GetService("UserInputService")
+    local Players = game:GetService("Players")
+    local RunService = game:GetService("RunService")
+    local LocalPlayer = Players.LocalPlayer
+    
+    local lastActivityTime = tick()
+    local isBotActionInProgress = false
+    -- Initial random threshold between 30 and 60 seconds
+    local currentThreshold = math.random(30, 60)
+    
+    -- Function to reset timer (called by input)
+    local function resetTimer()
+        if not isBotActionInProgress then
+            lastActivityTime = tick()
+            -- Pick a new random threshold for the next idle period whenever the user is active
+            -- This ensures that every time you go AFK, the wait time is different
+            currentThreshold = math.random(30, 60)
+        end
+    end
+
+    UserInputService.InputBegan:Connect(function(input, gameProcessed) resetTimer() end)
+    
+    -- Monitor mouse movement etc
+    UserInputService.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+           resetTimer()
+        end
+    end)
+
+    print("Smart Anti-AFK Monitor Started: Visual Bar + Random 30-60s Timer")
+
+    -- UI Update Loop (Smooth)
+    RunService.Heartbeat:Connect(function()
+        local fill = getgenv().AFK_BAR_FILL
+        if fill then
+            local now = tick()
+            local elapsed = now - lastActivityTime
+            local progress = math.clamp(elapsed / currentThreshold, 0, 1)
+            
+            fill.Size = UDim2.new(progress, 0, 1, 0)
+            
+            -- Color Interpolation: Red (0) -> Green (1)
+            local hue = progress * 0.33
+            fill.BackgroundColor3 = Color3.fromHSV(hue, 0.9, 1)
+        end
+    end)
+
+    -- Logic Loop
+    while true do
+        task.wait(0.5) -- Check every half second
+        local now = tick()
+        local timeSinceActivity = now - lastActivityTime
+        
+        if timeSinceActivity >= currentThreshold then
+            isBotActionInProgress = true
+            
+            -- Trigger Action
+            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Humanoid") then
+               pcall(function()
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.W, false, game)
+                    task.wait(0.3)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.W, false, game)
+                    
+                    task.wait(0.3)
+                    
+                    VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.S, false, game)
+                    task.wait(0.3)
+                    VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.S, false, game)
+               end)
+            end
+            
+            -- Reset Timer after action and pick NEW threshold
+            lastActivityTime = tick()
+            currentThreshold = math.random(30, 60)
+            isBotActionInProgress = false
+        end
+    end
+end)
