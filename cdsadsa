@@ -1755,7 +1755,7 @@ Tabs.Settings:AddButton({
 -- Wpisz tu link do surowego kodu (Raw), np. "https://raw.githubusercontent.com/User/Repo/main/script.lua"
 -- Jeśli to pole jest wypełnione, skrypt użyje go do Auto Execute (nie trzeba pliku na dysku).
 -- Jeśli jest puste (""), skrypt będzie szukać pliku "CaseParadiseSCRIPT.lua" w workspace (Tryb Testowy).
-local ScriptLoaderURL = "https://raw.githubusercontent.com/Orynnek/Scripts/refs/heads/main/123331313132313" 
+local ScriptLoaderURL = "https://raw.githubusercontent.com/Orynnek/Scripts/refs/heads/main/cdsadsa" 
 
 -- QUEUE ON TELEPORT (Auto Execute on Server Switch)
 local scriptFileName = "CaseParadiseSCRIPT.lua"
